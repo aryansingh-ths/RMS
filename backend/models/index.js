@@ -1,0 +1,16 @@
+module.exports = {
+  Device: require('./Device'),
+  Table: require('./Table'),
+  TableSession: require('./TableSession'),
+  MenuItem: require('./MenuItem'),
+  Inventory: require('./Inventory'),
+  Recipe: require('./Recipe'),
+  Order: require('./Order'),
+  User: require('./User'),
+  Customer: require('./Customer'),
+  Category: require('./Category'),
+  Vendor: require('./Vendor'),
+  PurchaseOrder: require('./PurchaseOrder'),
+  AuditLog: require('./AuditLog'),
+  Shift: require('./Shift')
+};

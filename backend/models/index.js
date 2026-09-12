@@ -12,5 +12,8 @@ module.exports = {
   Vendor: require('./Vendor'),
   PurchaseOrder: require('./PurchaseOrder'),
   AuditLog: require('./AuditLog'),
-  Shift: require('./Shift')
+  Shift: require('./Shift'),
+  TaxConfig: require('./TaxConfig'),
+  Package: require('./Package'),
+  Booking: require('./Booking')
 };

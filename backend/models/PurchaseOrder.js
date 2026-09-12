@@ -9,7 +9,8 @@ const poSchema = new mongoose.Schema({
     cost_per_unit: { type: Number, required: true }
   }],
   total_amount: { type: Number, required: true },
-  status: { type: String, enum: ['pending', 'received', 'cancelled'], default: 'pending' },
+  status: { type: String, enum: ['pending', 'dispatched', 'received', 'cancelled'], default: 'pending' },
+  dispatchedAt: { type: Date },
 }, { timestamps: true });
 
 module.exports = mongoose.model('PurchaseOrder', poSchema);

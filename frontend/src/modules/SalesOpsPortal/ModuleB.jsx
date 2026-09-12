@@ -24,7 +24,7 @@ const Pill = ({ label, color = 'gray' }) => {
 };
 
 const Card = ({ children, className = '' }) => (
-  <div className={`bg-white rounded-[24px] p-6 shadow-[0_4px_24px_rgb(0,0,0,0.04)] ${className}`}>
+  <div className={`bg-white rounded-2xl p-6 border border-gray-100 shadow-sm ${className}`}>
     {children}
   </div>
 );
@@ -93,10 +93,12 @@ const STATUS_STYLES = {
 
 const HostStandPanel = ({ socket }) => {
   const [tables, setTables] = useState([]);
+  const [packages, setPackages] = useState([]);
+  const [bookingsCount, setBookingsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ guestName: '', mobile: '', party: '' });
+  const [form, setForm] = useState({ guestName: '', mobile: '', party: '', bookingMode: 'now', bookingTime: '', packageId: '' });
   const [toast, setToast] = useState(null);
   const [zoneFilter, setZoneFilter] = useState('All');
 
@@ -109,7 +111,7 @@ const HostStandPanel = ({ socket }) => {
         id: t.table_id,
         zone: t.zone,
         capacity: t.capacity,
-        status: t.sessionStatus === 'occupied' ? 'seated' : 'available',
+        status: t.sessionStatus === 'occupied' ? 'seated' : (t.sessionStatus === 'reserved' ? 'reserved' : 'available'),
         guest: t.guest_name || null,
         mobile: null,
         party: null,
@@ -121,15 +123,43 @@ const HostStandPanel = ({ socket }) => {
     }
   }, []);
 
-  useEffect(() => { fetchTables(); }, [fetchTables]);
+  const fetchPackages = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/admin/packages`);
+      const data = await res.json();
+      setPackages(data);
+    } catch (e) {
+      console.error('Failed to fetch packages', e);
+    }
+  }, []);
+
+  const fetchBookingsCount = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/bookings`);
+      const data = await res.json();
+      const activeBookings = data.filter(b => !['cancelled', 'completed'].includes(b.status));
+      setBookingsCount(activeBookings.length);
+    } catch (e) {
+      console.error('Failed to fetch bookings', e);
+    }
+  }, []);
+
+  useEffect(() => { fetchTables(); fetchPackages(); fetchBookingsCount(); }, [fetchTables, fetchPackages, fetchBookingsCount]);
 
   // Listen for socket events to refresh
   useEffect(() => {
     if (!socket) return;
     socket.on('session_started', fetchTables);
     socket.on('session_reset', fetchTables);
-    return () => { socket.off('session_started', fetchTables); socket.off('session_reset', fetchTables); };
-  }, [socket, fetchTables]);
+    socket.on('refresh_tables', fetchTables);
+    socket.on('refresh_tables', fetchBookingsCount);
+    return () => { 
+      socket.off('session_started', fetchTables); 
+      socket.off('session_reset', fetchTables); 
+      socket.off('refresh_tables', fetchTables); 
+      socket.off('refresh_tables', fetchBookingsCount);
+    };
+  }, [socket, fetchTables, fetchBookingsCount]);
 
   const zones = ['All', ...new Set(tables.map(t => t.zone))];
   const showToast = (message, type = 'success') => {
@@ -141,18 +171,59 @@ const HostStandPanel = ({ socket }) => {
     if (table.status !== 'available') return;
     setSelected(table);
     setModal(true);
-    setForm({ guestName: '', mobile: '', party: '' });
+    
+    // Set default booking time to next 30 min block
+    const now = new Date();
+    now.setMinutes(Math.ceil(now.getMinutes() / 30) * 30);
+    const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+    const localISOTime = (new Date(now - tzoffset)).toISOString().slice(0, 16);
+    
+    setForm({ guestName: '', mobile: '', party: '', bookingMode: 'now', bookingTime: localISOTime, packageId: '' });
   };
 
-  const startSession = (e) => {
+  const startSession = async (e) => {
     e.preventDefault();
     if (!selected) return;
-    socket.emit('start_session', { device_id: selected.id, guest_name: form.guestName, mobile: form.mobile });
-    setTables(prev => prev.map(t => t.id === selected.id
-      ? { ...t, status: 'seated', guest: form.guestName, mobile: form.mobile, party: parseInt(form.party) || 1 }
-      : t));
-    setModal(false);
-    showToast(`Session started for ${form.guestName} at ${selected.id}`);
+
+    if (form.bookingMode === 'future') {
+      // Create a booking
+      try {
+        const res = await fetch(`${API}/api/bookings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            table_id: selected.id,
+            guest_name: form.guestName,
+            mobile: form.mobile,
+            party_size: parseInt(form.party) || 1,
+            booking_time: new Date(form.bookingTime).toISOString(),
+            package_id: form.packageId || undefined
+          })
+        });
+        if (res.ok) {
+          showToast(`Future booking scheduled for ${form.guestName} at ${selected.id}`);
+          setModal(false);
+        } else {
+          const err = await res.json();
+          showToast(err.error || 'Failed to schedule booking', 'error');
+        }
+      } catch (err) {
+        showToast('Error scheduling booking', 'error');
+      }
+    } else {
+      // Start session now
+      socket.emit('start_session', { 
+        device_id: selected.id, 
+        guest_name: form.guestName, 
+        mobile: form.mobile,
+        package_id: form.packageId || undefined 
+      });
+      setTables(prev => prev.map(t => t.id === selected.id
+        ? { ...t, status: 'seated', guest: form.guestName, mobile: form.mobile, party: parseInt(form.party) || 1 }
+        : t));
+      setModal(false);
+      showToast(`Session started for ${form.guestName} at ${selected.id}`);
+    }
   };
 
   const markCleaned = (tableId) => {
@@ -167,7 +238,7 @@ const HostStandPanel = ({ socket }) => {
   };
 
   const filtered = zoneFilter === 'All' ? tables : tables.filter(t => t.zone === zoneFilter);
-  const counts = { available: tables.filter(t => t.status === 'available').length, seated: tables.filter(t => t.status === 'seated').length, reserved: tables.filter(t => t.status === 'reserved').length, cleaning: tables.filter(t => t.status === 'cleaning').length };
+  const counts = { available: tables.filter(t => t.status === 'available').length, seated: tables.filter(t => t.status === 'seated').length, bookings: bookingsCount, cleaning: tables.filter(t => t.status === 'cleaning').length };
 
   if (loading) return (
     <div className="flex items-center justify-center h-64 text-gray-300">
@@ -193,21 +264,47 @@ const HostStandPanel = ({ socket }) => {
               </button>
             </div>
             <form onSubmit={startSession} className="flex flex-col gap-4">
+              <div className="flex bg-gray-100 p-1 rounded-xl w-full mb-2">
+                <button type="button" onClick={() => setForm(p => ({...p, bookingMode: 'now'}))} className={`flex-1 py-2 text-xs font-bold uppercase tracking-widest rounded-lg transition-all ${form.bookingMode === 'now' ? 'bg-white shadow text-[#c59a63]' : 'text-gray-400'}`}>Now</button>
+                <button type="button" onClick={() => setForm(p => ({...p, bookingMode: 'future'}))} className={`flex-1 py-2 text-xs font-bold uppercase tracking-widest rounded-lg transition-all ${form.bookingMode === 'future' ? 'bg-white shadow text-[#c59a63]' : 'text-gray-400'}`}>Future Booking</button>
+              </div>
+
+              {form.bookingMode === 'future' && (
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Date & Time *</label>
+                  <input type="datetime-local" required value={form.bookingTime} onChange={e => setForm(p => ({ ...p, bookingTime: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
+                </div>
+              )}
+
               <div>
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Guest Name *</label>
                 <input required value={form.guestName} onChange={e => setForm(p => ({ ...p, guestName: e.target.value }))} placeholder="e.g. Vance Party" className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
               </div>
-              <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Mobile Number</label>
-                <input value={form.mobile} onChange={e => setForm(p => ({ ...p, mobile: e.target.value }))} placeholder="e.g. 9876543210" className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Mobile Number</label>
+                  <input value={form.mobile} onChange={e => setForm(p => ({ ...p, mobile: e.target.value }))} placeholder="e.g. 9876543210" className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Party Size</label>
+                  <input type="number" min="1" max={selected.capacity} value={form.party} onChange={e => setForm(p => ({ ...p, party: e.target.value }))} placeholder={`Max ${selected.capacity}`} className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
+                </div>
               </div>
+
               <div>
-                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Party Size</label>
-                <input type="number" min="1" max={selected.capacity} value={form.party} onChange={e => setForm(p => ({ ...p, party: e.target.value }))} placeholder={`Max ${selected.capacity}`} className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Apply Package (Optional)</label>
+                <select value={form.packageId} onChange={e => setForm(p => ({ ...p, packageId: e.target.value }))} className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors appearance-none">
+                  <option value="">-- No Package --</option>
+                  {packages.map(pkg => (
+                    <option key={pkg._id} value={pkg._id}>{pkg.name} {pkg.pricing_type === 'free' ? '(Free)' : `(₹${pkg.price}/pp)`}</option>
+                  ))}
+                </select>
               </div>
+
               <button type="submit" className="w-full py-3.5 rounded-xl bg-[#c59a63] hover:bg-[#b8895a] text-white font-bold text-sm shadow-lg shadow-[#c59a63]/30 flex items-center justify-center gap-2 transition-all mt-2">
-                <span className="material-symbols-outlined text-[18px]">play_arrow</span>
-                Start Dining Session
+                <span className="material-symbols-outlined text-[18px]">{form.bookingMode === 'now' ? 'play_arrow' : 'calendar_month'}</span>
+                {form.bookingMode === 'now' ? 'Start Dining Session' : 'Schedule Booking'}
               </button>
             </form>
           </div>
@@ -219,10 +316,10 @@ const HostStandPanel = ({ socket }) => {
         {[
           { label: 'Available', count: counts.available, icon: 'check_circle', color: 'text-emerald-500', bg: 'bg-emerald-50' },
           { label: 'Seated',    count: counts.seated,    icon: 'people',        color: 'text-indigo-500', bg: 'bg-indigo-50'  },
-          { label: 'Reserved',  count: counts.reserved,  icon: 'event_available',color: 'text-amber-500', bg: 'bg-amber-50'   },
+          { label: 'Bookings',  count: counts.bookings,  icon: 'calendar_today',color: 'text-amber-500', bg: 'bg-amber-50'   },
           { label: 'Cleaning',  count: counts.cleaning,  icon: 'cleaning_services', color: 'text-red-500', bg: 'bg-red-50'  },
         ].map((s, i) => (
-          <div key={i} className="bg-white rounded-[20px] p-5 shadow-[0_4px_24px_rgb(0,0,0,0.04)] flex items-center gap-4">
+          <div key={i} className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm flex items-center gap-4">
             <div className={`w-10 h-10 ${s.bg} rounded-2xl flex items-center justify-center`}>
               <span className={`material-symbols-outlined ${s.color} text-[20px]`}>{s.icon}</span>
             </div>
@@ -241,14 +338,7 @@ const HostStandPanel = ({ socket }) => {
             <button key={z} onClick={() => setZoneFilter(z)} className={`px-4 py-1.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-all ${zoneFilter === z ? 'bg-white shadow text-[#c59a63]' : 'text-gray-400 hover:text-gray-700'}`}>{z}</button>
           ))}
         </div>
-        <div className="flex items-center gap-5">
-          {Object.entries(STATUS_STYLES).filter(([k]) => k !== 'occupied').map(([key, s]) => (
-            <div key={key} className="flex items-center gap-1.5">
-              <span className={`w-2 h-2 rounded-full ${s.dot}`} />
-              <span className="text-[10px] text-gray-400 font-semibold capitalize">{key}</span>
-            </div>
-          ))}
-        </div>
+
       </div>
 
       {/* Floor Grid */}
@@ -260,7 +350,7 @@ const HostStandPanel = ({ socket }) => {
             <div
               key={table.id}
               onClick={() => isClickable && openModal(table)}
-              className={`${style.bg} ${style.ring} border-2 rounded-[24px] p-5 flex flex-col gap-3 shadow-[0_4px_20px_rgb(0,0,0,0.04)] transition-all duration-200 ${isClickable ? 'cursor-pointer hover:-translate-y-1 hover:shadow-lg' : ''}`}
+              className={`${style.bg} ${style.ring} border rounded-2xl p-5 flex flex-col gap-3 shadow-sm transition-all duration-200 ${isClickable ? 'cursor-pointer hover:-translate-y-1 hover:shadow-md' : ''}`}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -396,7 +486,7 @@ const TableManagementPanel = () => {
 
       {/* Add Table Form */}
       {showForm && (
-        <div className="bg-white rounded-[24px] p-6 shadow-[0_4px_24px_rgb(0,0,0,0.04)] mb-6 border-2 border-[#c59a63]/20">
+        <div className="bg-white rounded-2xl p-6 shadow-sm mb-6 border border-gray-100">
           <div className="flex items-center justify-between mb-5">
             <h3 className="font-black text-base text-gray-800">New Table</h3>
             <button onClick={() => setShowForm(false)} className="w-8 h-8 rounded-xl bg-gray-50 hover:bg-gray-100 flex items-center justify-center text-gray-400">
@@ -439,7 +529,7 @@ const TableManagementPanel = () => {
           <span className="material-symbols-outlined text-4xl animate-spin">autorenew</span>
         </div>
       ) : (
-        <div className="bg-white rounded-[24px] shadow-[0_4px_24px_rgb(0,0,0,0.04)] overflow-hidden">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-50">
@@ -584,7 +674,7 @@ const KDSPanel = ({ socket }) => {
           const course = COURSES[order.course] || COURSES.main;
 
           return (
-            <div key={order.id} className={`${compactView ? 'w-full' : 'w-80 flex-shrink-0'} bg-white rounded-[24px] border-t-4 ${slaColor} shadow-[0_4px_24px_rgb(0,0,0,0.06)] flex flex-col overflow-hidden transition-all hover:-translate-y-1 duration-200`}>
+            <div key={order.id} className={`${compactView ? 'w-full' : 'w-80 flex-shrink-0'} bg-white rounded-2xl border border-gray-100 border-t-4 ${slaColor} shadow-sm flex flex-col overflow-hidden transition-all hover:-translate-y-1 duration-200`}>
               {/* Ticket Header */}
               <div className={`${compactView ? 'px-4 py-3' : 'px-5 py-4'} border-b border-gray-50 flex items-center justify-between`}>
                 <div>
@@ -681,7 +771,7 @@ const CustomerDetailsPanel = () => {
         </div>
       </div>
 
-      <div className="bg-white rounded-[24px] shadow-[0_4px_24px_rgb(0,0,0,0.04)] overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-50">
@@ -720,15 +810,18 @@ const CustomerDetailsPanel = () => {
 const OrderHistoryPanel = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [orderDate, setOrderDate] = useState('');
+  const dateInputRef = useRef(null);
 
   useEffect(() => {
-    fetch(`${API}/api/kitchen/history`)
+    setLoading(true);
+    fetch(`${API}/api/kitchen/history${orderDate ? `?date=${orderDate}` : ''}`)
       .then(res => res.json())
       .then(data => { setOrders(data); setLoading(false); })
       .catch(console.error);
-  }, []);
+  }, [orderDate]);
 
-  if (loading) return (
+  if (loading && orders.length === 0) return (
     <div className="flex items-center justify-center h-64 text-gray-300">
       <span className="material-symbols-outlined text-4xl animate-spin">autorenew</span>
     </div>
@@ -741,13 +834,38 @@ const OrderHistoryPanel = () => {
           <h2 className="text-xl font-black text-gray-800">Order History</h2>
           <p className="text-xs text-gray-400 mt-0.5">Recently completed and paid orders</p>
         </div>
-        <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-full border border-gray-100 shadow-sm">
-          <span className="material-symbols-outlined text-gray-400 text-[18px]">receipt_long</span>
-          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{orders.length} Orders</span>
+        <div className="flex items-center gap-3">
+          {/* Date Picker */}
+          <div className="relative flex items-center cursor-pointer" onClick={() => dateInputRef.current && dateInputRef.current.showPicker()}>
+            <div className="flex items-center gap-2 px-4 py-2 rounded-full border border-gray-200 bg-white text-sm font-medium text-gray-700 shadow-sm hover:border-[#c59a63] transition-colors pointer-events-none">
+              <span className="material-symbols-outlined text-[16px] text-[#c59a63]">calendar_today</span>
+              <span>
+                {orderDate 
+                  ? new Date(orderDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                  : 'All Time'
+                }
+              </span>
+              <span className="material-symbols-outlined text-[14px] text-gray-400">expand_more</span>
+            </div>
+            <input
+              ref={dateInputRef}
+              type="date"
+              value={orderDate}
+              onChange={e => setOrderDate(e.target.value)}
+              onClick={e => e.stopPropagation()}
+              style={{ position: 'absolute', bottom: 0, left: '50%', opacity: 0, pointerEvents: 'none' }}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            />
+          </div>
+
+          <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-full border border-gray-100 shadow-sm">
+            <span className="material-symbols-outlined text-gray-400 text-[18px]">receipt_long</span>
+            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{orders.length} Orders</span>
+          </div>
         </div>
       </div>
 
-      <div className="bg-white rounded-[24px] shadow-[0_4px_24px_rgb(0,0,0,0.04)] overflow-hidden">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-50">
@@ -778,7 +896,7 @@ const OrderHistoryPanel = () => {
                   </span>
                 </td>
                 <td className="px-6 py-4 text-gray-500 text-xs font-semibold">
-                  {new Date(o.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {new Date(o.completedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                 </td>
               </tr>
             ))}
@@ -789,17 +907,141 @@ const OrderHistoryPanel = () => {
   );
 };
 
+// ─── Panel 5: Bookings ─────────────────────────────────────────────────────────
+
+const BookingsPanel = ({ socket }) => {
+  const [bookings, setBookings] = useState([]);
+  const [toast, setToast] = useState(null);
+
+  const fetchBookings = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/bookings`);
+      const data = await res.json();
+      setBookings(data);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  useEffect(() => { fetchBookings(); }, [fetchBookings]);
+
+  useEffect(() => {
+    if (!socket) return;
+    socket.on('refresh_tables', fetchBookings);
+    return () => socket.off('refresh_tables', fetchBookings);
+  }, [socket, fetchBookings]);
+
+  const showToast = (message, type = 'success') => { setToast({ message, type }); setTimeout(() => setToast(null), 3000); };
+
+  const cancelBooking = async (id, tableId) => {
+    if (!window.confirm('Cancel this booking and free the table?')) return;
+    try {
+      const res = await fetch(`${API}/api/bookings/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'cancelled' })
+      });
+      if (res.ok) {
+        // Free the table
+        await fetch(`${API}/api/sales/session/close`, { 
+          method: 'POST', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify({ device_id: tableId }) 
+        });
+        showToast('Booking cancelled & Table freed');
+        fetchBookings();
+        if (socket) socket.emit('admin_override_reset', { device_id: tableId });
+      } else {
+        showToast('Failed to cancel', 'error');
+      }
+    } catch (err) {
+      showToast('Error', 'error');
+    }
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'pending': return 'amber';
+      case 'ready': return 'cyan';
+      case 'active': return 'blue';
+      case 'completed': return 'green';
+      case 'cancelled': return 'red';
+      default: return 'gray';
+    }
+  };
+
+  return (
+    <div className="w-full flex flex-col gap-6">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-xl font-black text-gray-800">Future Bookings</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Manage upcoming reservations</p>
+        </div>
+        <button onClick={fetchBookings} className="px-4 py-2 bg-white rounded-full border border-gray-200 text-sm font-bold text-gray-600 shadow-sm hover:shadow-md transition-all flex items-center gap-2">
+          <span className="material-symbols-outlined text-[18px]">refresh</span> Refresh
+        </button>
+      </div>
+
+      <Card className="p-0 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-50">
+              <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-6 py-4">Booking Time</th>
+              <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-4 py-4">Guest</th>
+              <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-4 py-4">Table</th>
+              <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-4 py-4">Package</th>
+              <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-4 py-4">Status</th>
+              <th className="text-right text-[10px] font-bold text-gray-400 uppercase tracking-widest px-6 py-4">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bookings.length > 0 ? bookings.map(b => (
+              <tr key={b._id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                <td className="px-6 py-4 font-semibold text-gray-800">
+                  {new Date(b.booking_time).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                </td>
+                <td className="px-4 py-4">
+                  <div className="font-bold text-gray-900">{b.guest_name}</div>
+                  <div className="text-xs text-gray-500">{b.mobile || 'No mobile'} · Party of {b.party_size}</div>
+                </td>
+                <td className="px-4 py-4 font-bold text-gray-700">{b.table_id}</td>
+                <td className="px-4 py-4">
+                  {b.package_id ? (
+                    <span className="px-2 py-1 bg-pink-50 text-pink-700 text-xs font-bold rounded-lg">{b.package_id.name}</span>
+                  ) : <span className="text-gray-400 text-xs">-</span>}
+                </td>
+                <td className="px-4 py-4">
+                  <Pill label={b.status} color={getStatusColor(b.status)} />
+                </td>
+                <td className="px-6 py-4 text-right">
+                  {['pending', 'ready', 'active', 'standby'].includes(b.status) && (
+                    <button onClick={() => cancelBooking(b._id, b.table_id)} className="text-red-500 hover:text-red-700 font-bold text-xs bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-lg transition-colors">
+                      Cancel
+                    </button>
+                  )}
+                </td>
+              </tr>
+            )) : <tr><td colSpan={6} className="text-center text-gray-400 py-12">No bookings found.</td></tr>}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+};
+
 // ─── Navigation Config ────────────────────────────────────────────────────────
 
 const NAV = [
   { key: 'host',      label: 'Host Stand',       icon: 'table_restaurant', group: 'Front of House' },
+  { key: 'bookings',  label: 'Bookings',         icon: 'calendar_month',   group: 'Front of House' },
   { key: 'tables',    label: 'Table Management', icon: 'grid_view',        group: 'Front of House' },
   { key: 'customers', label: 'Customer Details', icon: 'group',            group: 'Front of House' },
   { key: 'kds',       label: 'Kitchen Display',  icon: 'soup_kitchen',     group: 'Kitchen' },
   { key: 'history',   label: 'Order History',    icon: 'receipt_long',     group: 'Reports' },
 ];
 
-const PANELS = { host: HostStandPanel, tables: TableManagementPanel, customers: CustomerDetailsPanel, kds: KDSPanel, history: OrderHistoryPanel };
+const PANELS = { host: HostStandPanel, bookings: BookingsPanel, tables: TableManagementPanel, customers: CustomerDetailsPanel, kds: KDSPanel, history: OrderHistoryPanel };
 
 // ─── Shell ────────────────────────────────────────────────────────────────────
 
@@ -843,44 +1085,60 @@ const ModuleB = () => {
   );
 
   return (
-    <div className="bg-[#f8f9fa] font-sans text-slate-800 antialiased min-h-screen flex flex-col">
+    <div
+      className="min-h-screen font-sans text-slate-800 antialiased selection:bg-[#c59a63]/30 flex flex-col"
+      style={{
+        backgroundColor: '#f8f9ff',
+        backgroundImage: [
+          'radial-gradient(ellipse 65% 55% at 0% 0%, rgba(255, 210, 150, 0.28) 0%, transparent 65%)',
+          'radial-gradient(ellipse 70% 60% at 100% 100%, rgba(196, 215, 255, 0.22) 0%, transparent 65%)',
+          'linear-gradient(rgba(148, 163, 200, 0.12) 1px, transparent 1px)',
+          'linear-gradient(90deg, rgba(148, 163, 200, 0.12) 1px, transparent 1px)',
+        ].join(', '),
+        backgroundSize: '100% 100%, 100% 100%, 28px 28px, 28px 28px',
+      }}
+    >
       {/* ── HEADER NAV ─────────────────────────────────────────────── */}
-      <header className="bg-white border-b border-gray-100 flex items-center px-6 h-16 shrink-0 z-40 relative">
-        <div className="flex items-center gap-2 w-64">
-          <img src="/techhansa-logo.png" alt="Pragati RMS" className="w-12 h-12 object-contain" />
-          <span className="text-xl font-black tracking-tight text-yellow-600">Pragati RMS</span>
-        </div>
-        
-        <nav className="flex flex-wrap items-center gap-1 flex-1 justify-center px-4">
-          {NAV.map(item => (
-            <button
-              key={item.key}
-              onClick={() => setActiveTab(item.key)}
-              className={`px-4 py-1.5 rounded-full text-sm font-medium transition-all ${
-                activeTab === item.key
-                  ? 'bg-gray-900 text-white shadow-md'
-                  : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        
-        <div className="flex items-center gap-3 w-64 justify-end">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-[10px] font-black tracking-widest uppercase">
-            <span className="material-symbols-outlined text-[14px]">storefront</span>
-            Sales &amp; Ops
+      <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-40">
+        <div className="max-w-[1600px] mx-auto px-5 h-[90px] flex items-center justify-between gap-4">
+          
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <img src="/techhansa-logo.png" alt="Pragati RMS" className="h-16 w-auto object-contain" />
+            <span className="text-3xl font-black tracking-tight text-[#c59a63] hidden sm:block">Pragati RMS</span>
           </div>
-          <div className="w-px h-4 bg-gray-200 mx-1"></div>
-          <button onClick={handleLogout} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-500 hover:bg-gray-200 transition-colors" title="Log Out">
-            <span className="material-symbols-outlined text-[16px]">logout</span>
-          </button>
+          
+          <nav className="hidden lg:flex items-center bg-gray-100 rounded-full p-1 gap-0.5 mx-auto">
+            {NAV.map(item => (
+              <button
+                key={item.key}
+                onClick={() => setActiveTab(item.key)}
+                className={`px-4 py-1.5 rounded-full text-[13px] font-bold transition-all duration-200 whitespace-nowrap ${
+                  activeTab === item.key
+                    ? 'bg-gray-900 text-white shadow-md'
+                    : 'text-gray-500 hover:text-gray-900'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-700 text-[9px] font-black tracking-widest uppercase">
+              <span className="material-symbols-outlined text-[12px]">storefront</span>
+              Sales &amp; Ops
+            </div>
+            <div className="w-px h-4 bg-gray-200 mx-1 hidden md:block"></div>
+            <button onClick={handleLogout} className="flex items-center gap-1 px-2 py-1.5 rounded-full text-[13px] font-semibold text-red-500 hover:text-red-700 hover:bg-red-50 transition-all" title="Log Out">
+              <span className="material-symbols-outlined text-[16px]">logout</span>
+              <span>Log Out</span>
+            </button>
+          </div>
         </div>
       </header>
 
       {/* ── MAIN CONTENT ───────────────────────────────────────── */}
-      <main className="flex-1 w-full max-w-[1400px] mx-auto p-8 pt-10 overflow-y-auto">
+      <main className="flex-1 w-full max-w-[1600px] mx-auto p-6 md:p-8 overflow-x-hidden">
         <ActivePanel socket={socket} />
       </main>
     </div>

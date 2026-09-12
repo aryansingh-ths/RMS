@@ -6,6 +6,7 @@ const menuItemSchema = new mongoose.Schema({
   image_url: { type: String },
   category: { type: String },
   is_veg: { type: Boolean, default: false },
+  tags: [{ type: String }],
 }, { timestamps: true });
 
 module.exports = mongoose.model('MenuItem', menuItemSchema);

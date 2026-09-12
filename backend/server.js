@@ -5,8 +5,26 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
-const { User, Device, Table, TableSession, Order, Recipe, Inventory, MenuItem, Customer, Category, Vendor, PurchaseOrder, AuditLog, Shift } = require('./models');
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+}
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+const upload = multer({ storage: storage });
+
+const { User, Device, Table, TableSession, Order, Recipe, Inventory, MenuItem, Customer, Category, Vendor, PurchaseOrder, AuditLog, Shift, TaxConfig, Package, Booking } = require('./models');
 
 const app = express();
 const server = http.createServer(app);
@@ -16,6 +34,7 @@ const io = new Server(server, {
 
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
@@ -118,9 +137,9 @@ app.get('/api/admin/categories', async (req, res) => {
 
 app.post('/api/admin/categories', async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, tags } = req.body;
     if (!name) return res.status(400).json({ error: 'Name is required' });
-    const category = new Category({ name });
+    const category = new Category({ name, tags: tags || [] });
     await category.save();
     res.status(201).json(category);
   } catch (err) {
@@ -240,84 +259,199 @@ app.post('/api/checkout/webhook', async (req, res) => {
   }
 });
 
+
+// --- TAX CONFIG ---
+app.get('/api/admin/tax-config', async (req, res) => {
+  try {
+    const taxes = await TaxConfig.find().sort({ createdAt: 1 });
+    res.json(taxes);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/tax-config', async (req, res) => {
+  try {
+    const { name, rate, is_active } = req.body;
+    if (!name || rate == null) return res.status(400).json({ error: 'Name and rate are required' });
+    const tax = new TaxConfig({ name, rate, is_active });
+    await tax.save();
+    res.status(201).json(tax);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/tax-config/:id', async (req, res) => {
+  try {
+    const { name, rate, is_active } = req.body;
+    const tax = await TaxConfig.findByIdAndUpdate(req.params.id, { name, rate, is_active }, { new: true });
+    res.json(tax);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/tax-config/:id', async (req, res) => {
+  try {
+    await TaxConfig.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- ADMIN CONSOLE API ROUTES ---
 
 // Get Dashboard Metrics
 app.get('/api/admin/metrics', async (req, res) => {
   try {
     const { filter, date } = req.query;
-    let query = {};
     const now = new Date();
-    let start = new Date(now);
-    
-    if (filter === 'custom' && date) {
-      start = new Date(date);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(date);
-      end.setHours(23, 59, 59, 999);
-      query.createdAt = { $gte: start, $lte: end };
-    } else {
-      if (filter === 'week') {
-        start.setDate(now.getDate() - now.getDay());
-        start.setHours(0, 0, 0, 0);
-      } else if (filter === 'month') {
-        start.setDate(1);
-        start.setHours(0, 0, 0, 0);
-      } else if (filter === 'year') {
-        start.setMonth(0, 1);
-        start.setHours(0, 0, 0, 0);
-      } else { // default to day
-        start.setHours(0, 0, 0, 0);
-      }
-      query.createdAt = { $gte: start, $lte: now };
-    }
-    
-    const todaysOrders = await Order.find(query);
-    
-    // Net Daily Revenue: Only today's paid or completed orders
-    const dailyRevenue = todaysOrders
-      .filter(o => o.status === 'paid' || o.status === 'completed')
-      .reduce((sum, order) => sum + (order.total_amount || 0), 0);
 
+    // ── Build current-period date range ──────────────────────────────────────
+    let currentStart = new Date(now);
+    let currentEnd   = new Date(now);
+    let periodMs     = 0; // length of the period in ms, used to compute previous period
+
+    if (filter === 'custom' && date) {
+      currentStart = new Date(date); currentStart.setHours(0, 0, 0, 0);
+      currentEnd   = new Date(date); currentEnd.setHours(23, 59, 59, 999);
+      periodMs = 24 * 60 * 60 * 1000;
+    } else if (filter === 'week') {
+      currentStart.setDate(now.getDate() - now.getDay()); currentStart.setHours(0, 0, 0, 0);
+      periodMs = 7 * 24 * 60 * 60 * 1000;
+    } else if (filter === 'month') {
+      currentStart.setDate(1); currentStart.setHours(0, 0, 0, 0);
+      periodMs = (now - currentStart);
+    } else if (filter === 'year') {
+      currentStart.setMonth(0, 1); currentStart.setHours(0, 0, 0, 0);
+      periodMs = (now - currentStart);
+    } else { // day (default)
+      currentStart.setHours(0, 0, 0, 0);
+      periodMs = 24 * 60 * 60 * 1000;
+    }
+
+    // ── Build previous-period date range (same duration, one period back) ────
+    const prevEnd   = new Date(currentStart.getTime() - 1);       // 1ms before current start
+    const prevStart = new Date(currentStart.getTime() - periodMs); // one period back
+
+    // ── Fetch orders ─────────────────────────────────────────────────────────
+    const [currentOrders, prevOrders] = await Promise.all([
+      Order.find({ createdAt: { $gte: currentStart, $lte: currentEnd } }),
+      Order.find({ createdAt: { $gte: prevStart,    $lte: prevEnd    } }),
+    ]);
+
+    // ── Current-period revenue ────────────────────────────────────────────────
+    const dailyRevenue = currentOrders
+      .filter(o => o.status === 'paid' || o.status === 'completed')
+      .reduce((sum, o) => sum + (o.total_amount || 0), 0);
+
+    // ── Previous-period revenue & growth ──────────────────────────────────────
+    const previousRevenue = prevOrders
+      .filter(o => o.status === 'paid' || o.status === 'completed')
+      .reduce((sum, o) => sum + (o.total_amount || 0), 0);
+    const revenueGrowthPct = previousRevenue > 0
+      ? parseFloat((((dailyRevenue - previousRevenue) / previousRevenue) * 100).toFixed(1))
+      : null; // null means "no previous data"
+
+    // ── Order counts ──────────────────────────────────────────────────────────
+    const totalOrdersToday     = currentOrders.length;
+    const previousOrderCount   = prevOrders.length;
+    const orderCountDelta      = totalOrdersToday - previousOrderCount;
+    const pendingOrdersToday   = currentOrders.filter(o => o.status === 'preparing').length;
+    const deliveredOrdersToday = currentOrders.filter(o => o.status === 'completed' || o.status === 'paid').length;
+
+    const cancellationsToday   = currentOrders.filter(o => o.status === 'cancelled').length;
+    
+    // Average Wait Time for completed/paid orders
+    const completedOrdersForWaitTime = currentOrders.filter(o => o.status === 'completed' || o.status === 'paid');
+    const avgWaitTimeSeconds = completedOrdersForWaitTime.length > 0 
+      ? Math.round(completedOrdersForWaitTime.reduce((sum, o) => {
+          const endTime = o.completedAt ? new Date(o.completedAt) : new Date(o.updatedAt);
+          return sum + (endTime - new Date(o.createdAt)) / 1000;
+        }, 0) / completedOrdersForWaitTime.length)
+      : 0;
+
+    // Payment Split
+    const paidWithMethod = currentOrders.filter(o => o.payment_method && (o.status === 'paid' || o.status === 'completed'));
+    const totalWithMethod = paidWithMethod.length;
+    let paymentUpiCardPct = 0;
+    let paymentCashPct = 0;
+    if (totalWithMethod > 0) {
+      const upiCardCount = paidWithMethod.filter(o => o.payment_method === 'upi' || o.payment_method === 'card').length;
+      const cashCount = paidWithMethod.filter(o => o.payment_method === 'cash').length;
+      paymentUpiCardPct = Math.round((upiCardCount / totalWithMethod) * 100);
+      paymentCashPct = Math.round((cashCount / totalWithMethod) * 100);
+    }
+
+
+    // ── Dine-In vs Takeaway split ─────────────────────────────────────────────
+    // Orders with device_id starting with 'T' (e.g. T1, T2) are dine-in table orders.
+    // Orders with device_id = 'TAKEAWAY' or 'KIOSK' or 'takeaway' are takeaway.
+    const dineInCount   = currentOrders.filter(o => /^T\d+$/i.test(o.device_id)).length;
+    const takeawayCount = currentOrders.filter(o => !/^T\d+$/i.test(o.device_id)).length;
+
+    // ── Inventory ─────────────────────────────────────────────────────────────
     const inventory = await Inventory.find();
     const inventoryValuation = inventory.reduce((sum, item) => sum + (item.stock_level * (item.cost_per_unit || 1)), 0);
-
     const parAlerts = inventory.filter(item => (item.stock_level + (item.on_order || 0)) <= item.par_level);
 
-    const totalOrdersToday = todaysOrders.length;
-    const pendingOrdersToday = todaysOrders.filter(o => o.status === 'preparing').length;
-    const deliveredOrdersToday = todaysOrders.filter(o => o.status === 'completed' || o.status === 'paid').length;
-
-    // Live Floor Occupancy
-    const totalTables = await Table.countDocuments({ is_active: true });
+    // ── Floor Occupancy ───────────────────────────────────────────────────────
+    const totalTables   = await Table.countDocuments({ is_active: true });
     const activeSessions = await TableSession.countDocuments({ status: 'active' });
     const floorOccupancy = totalTables > 0 ? Math.round((activeSessions / totalTables) * 100) : 0;
 
-    // Top Sellers Leaderboard
-    const itemCounts = {};
-    todaysOrders.forEach(order => {
-      if (order.items && Array.isArray(order.items)) {
+    // ── Top Sellers with growth ───────────────────────────────────────────────
+    const buildItemMap = (orders) => {
+      const map = {};
+      orders.forEach(order => {
+        if (!Array.isArray(order.items)) return;
         order.items.forEach(item => {
-          if (!itemCounts[item.name]) itemCounts[item.name] = 0;
-          itemCounts[item.name] += (item.qty || 1);
+          if (!map[item.name]) map[item.name] = { qty: 0, revenue: 0, category: item.category || 'Main Course' };
+          map[item.name].qty     += (item.qty || 1);
+          map[item.name].revenue += (item.price || 0) * (item.qty || 1);
         });
-      }
-    });
-    const topSellers = Object.entries(itemCounts)
-      .map(([name, qty]) => ({ name, qty }))
+      });
+      return map;
+    };
+
+    const currentItemMap = buildItemMap(currentOrders);
+    const prevItemMap    = buildItemMap(prevOrders);
+
+    const topSellers = Object.entries(currentItemMap)
+      .map(([name, { qty, revenue, category }]) => {
+        const prevQty = prevItemMap[name]?.qty || 0;
+        const growthPct = prevQty > 0
+          ? parseFloat((((qty - prevQty) / prevQty) * 100).toFixed(1))
+          : null;
+        return { name, qty, revenue, category, growthPct };
+      })
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 5);
 
     res.json({
       dailyRevenue,
+      previousRevenue,
+      revenueGrowthPct,
       theoreticalMargin: 28.4,
       inventoryValuation,
       parAlerts,
       totalOrdersToday,
+      previousOrderCount,
+      orderCountDelta,
       pendingOrdersToday,
       deliveredOrdersToday,
+      dineInCount,
+      avgWaitTimeSeconds,
+      cancellationsToday,
+      paymentUpiCardPct,
+      paymentCashPct,
+      takeawayCount,
       floorOccupancy,
-      topSellers
+      activeTables: activeSessions,
+      totalTables,
+      topSellers,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -452,6 +586,12 @@ app.post('/api/admin/po/dispatch', async (req, res) => {
         total_amount,
         status: 'pending'
       });
+      // Auto-add vendor to catalog if not already present
+      await Vendor.findOneAndUpdate(
+        { name: vendor_name },
+        { $setOnInsert: { name: vendor_name, vetted: false } },
+        { upsert: true, new: true }
+      );
     }
 
     res.json({ success: true, message: 'POs dispatched and pending orders updated.' });
@@ -495,6 +635,13 @@ app.post('/api/admin/po/manual', async (req, res) => {
       status: 'pending'
     });
 
+    // Auto-add vendor to catalog if not already present
+    await Vendor.findOneAndUpdate(
+      { name: vendor_name },
+      { $setOnInsert: { name: vendor_name, vetted: false } },
+      { upsert: true, new: true }
+    );
+
     res.json({ success: true, message: 'Manual PO created successfully.', po });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -530,10 +677,18 @@ app.get('/api/sales/orders', async (req, res) => {
 app.post('/api/sales/session/close', async (req, res) => {
   try {
     const { device_id } = req.body;
-    const session = await TableSession.findOne({ device_id, status: 'active' });
+    const session = await TableSession.findOne({ device_id, status: { $in: ['active', 'standby'] } });
     if (!session) return res.status(404).json({ error: 'No active session for this table.' });
     session.status = 'completed';
     await session.save();
+    
+    // Sync booking status
+    await Booking.updateMany({ table_id: device_id, status: { $in: ['active', 'ready'] } }, { status: 'completed' });
+    
+    // Notify the kiosk so it resets to the idle/screensaver screen
+    io.to(`room_table_${device_id}`).emit('session_reset');
+    // Notify host stand to refresh
+    io.emit('refresh_tables');
     res.json({ success: true, message: `Session for table ${device_id} closed.` });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -551,12 +706,28 @@ app.get('/api/admin/menu-items', async (req, res) => {
   }
 });
 
+// Upload Image
+app.post('/api/admin/upload', upload.single('image'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  const imageUrl = `/uploads/${req.file.filename}`;
+  res.json({ url: imageUrl });
+});
+
 // Create a new Menu Item
 app.post('/api/admin/menu-items', async (req, res) => {
   try {
-    const { name, price, category, is_veg } = req.body;
+    const { name, price, category, is_veg, tags, image_url } = req.body;
     if (!name || !price) return res.status(400).json({ error: 'Name and price are required.' });
-    const item = new MenuItem({ name, price: parseFloat(price), category: category || 'General', is_veg: !!is_veg });
+    const item = new MenuItem({ 
+      name, 
+      price: parseFloat(price), 
+      category: category || 'General', 
+      is_veg: !!is_veg,
+      tags: tags || [],
+      image_url
+    });
     await item.save();
     res.status(201).json(item);
   } catch (err) {
@@ -567,8 +738,19 @@ app.post('/api/admin/menu-items', async (req, res) => {
 // Update a Menu Item
 app.put('/api/admin/menu-items/:id', async (req, res) => {
   try {
-    const { name, price, category, is_veg } = req.body;
-    const item = await MenuItem.findByIdAndUpdate(req.params.id, { name, price: parseFloat(price), category, is_veg: !!is_veg }, { new: true });
+    const { name, price, category, is_veg, tags, image_url } = req.body;
+    const item = await MenuItem.findByIdAndUpdate(
+      req.params.id, 
+      { 
+        name, 
+        price: parseFloat(price), 
+        category, 
+        is_veg: !!is_veg,
+        tags: tags || [],
+        image_url
+      }, 
+      { new: true }
+    );
     if (!item) return res.status(404).json({ error: 'Item not found.' });
     res.json(item);
   } catch (err) {
@@ -616,14 +798,25 @@ app.delete('/api/admin/recipes/:id', async (req, res) => {
 // Vendor CRUD
 app.get('/api/admin/vendors', async (req, res) => {
   try {
-    const vendors = await Vendor.find();
     const inventory = await Inventory.find();
-    
+
+    // Auto-sync: ensure every vendor referenced in inventory exists in the catalog
+    const inventoryVendorNames = [...new Set(inventory.map(i => i.vendor_name).filter(Boolean))];
+    for (const vname of inventoryVendorNames) {
+      await Vendor.findOneAndUpdate(
+        { name: vname },
+        { $setOnInsert: { name: vname, vetted: false } },
+        { upsert: true, new: true }
+      );
+    }
+
+    const vendors = await Vendor.find();
     const enrichedVendors = vendors.map(v => {
-      const items = inventory.filter(i => i.vendor_name === v.name).map(i => i.ingredient_name);
+      const vendorName = v.name || v.vendor_name;
+      const items = inventory.filter(i => i.vendor_name === vendorName).map(i => i.ingredient_name);
       return {
         _id: v._id,
-        vendor_name: v.name,
+        vendor_name: vendorName,
         contact_email: v.contact_email,
         phone: v.phone,
         edi_connected: v.edi_connected,
@@ -705,11 +898,25 @@ app.post('/api/admin/inventory/receive', async (req, res) => {
   }
 });
 
-// Receive PO
+// Mark PO as dispatched (sent to vendor)
+app.post('/api/admin/po/:id/dispatch', async (req, res) => {
+  try {
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po || po.status !== 'pending') return res.status(400).json({ error: 'Only pending POs can be dispatched.' });
+    po.status = 'dispatched';
+    po.dispatchedAt = new Date();
+    await po.save();
+    res.json({ success: true, message: 'Purchase order marked as dispatched.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Receive PO (stock update)
 app.post('/api/admin/po/:id/receive', async (req, res) => {
   try {
     const po = await PurchaseOrder.findById(req.params.id);
-    if (!po || po.status !== 'pending') return res.status(400).json({ error: 'Invalid or already received PO.' });
+    if (!po || !['pending', 'dispatched'].includes(po.status)) return res.status(400).json({ error: 'Invalid or already received PO.' });
 
     for (const i of po.items) {
       const item = await Inventory.findById(i.inventory_id);
@@ -763,8 +970,23 @@ app.get('/api/admin/finance/report', async (req, res) => {
     const grossRevenue = paidOrders.reduce((sum, o) => sum + o.total_amount, 0);
     const cogsEstimate = grossRevenue * 0.284;
     const netRevenue = grossRevenue - cogsEstimate;
-    const gstAmount = grossRevenue * 0.18;
-    const netAfterTax = grossRevenue - gstAmount;
+    
+    const taxes = await TaxConfig.find({ is_active: true });
+    let totalTaxAmount = 0;
+    const taxBreakdown = {};
+    taxes.forEach(tax => {
+      const amt = grossRevenue * tax.rate;
+      totalTaxAmount += amt;
+      taxBreakdown[tax.name] = amt;
+    });
+    
+    // Fallback if no taxes configured
+    if (taxes.length === 0) {
+      totalTaxAmount = grossRevenue * 0.18;
+      taxBreakdown['GST (Fallback 18%)'] = totalTaxAmount;
+    }
+    
+    const netAfterTax = grossRevenue - totalTaxAmount;
 
     // Hourly breakdown
     const hourlyMap = {};
@@ -801,7 +1023,8 @@ app.get('/api/admin/finance/report', async (req, res) => {
       grossRevenue,
       cogsEstimate,
       netRevenue,
-      gstAmount,
+      totalTaxAmount,
+      taxBreakdown,
       netAfterTax,
       orderCount: paidOrders.length,
       recentOrders: paidOrders.slice(0, 10),
@@ -947,12 +1170,12 @@ app.get('/api/admin/auditlogs', async (req, res) => {
 app.get('/api/tables', async (req, res) => {
   try {
     const tables = await Table.find({ is_active: true }).sort({ table_id: 1 });
-    const activeSessions = await TableSession.find({ status: 'active' });
+    const activeSessions = await TableSession.find({ status: { $in: ['active', 'standby'] } });
     const activeMap = {};
     activeSessions.forEach(s => { activeMap[s.device_id] = s; });
     const result = tables.map(t => ({
       ...t.toObject(),
-      sessionStatus: activeMap[t.table_id] ? 'occupied' : 'available',
+      sessionStatus: activeMap[t.table_id] ? (activeMap[t.table_id].status === 'active' ? 'occupied' : 'reserved') : 'available',
       guest_name: activeMap[t.table_id]?.guest_name || null,
     }));
     res.json(result);
@@ -1108,7 +1331,18 @@ app.post('/api/kitchen/bump', async (req, res) => {
 
 app.get('/api/kitchen/history', async (req, res) => {
   try {
-    const orders = await Order.find({ status: { $in: ['completed', 'paid'] } }).sort({ updatedAt: -1 }).limit(100);
+    const { date } = req.query;
+    let filter = { status: { $in: ['completed', 'paid'] } };
+    
+    if (date) {
+      const startOfDay = new Date(date);
+      startOfDay.setUTCHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setUTCHours(23, 59, 59, 999);
+      filter.updatedAt = { $gte: startOfDay, $lte: endOfDay };
+    }
+
+    const orders = await Order.find(filter).sort({ updatedAt: -1 }).limit(100);
     res.json(orders.map(o => ({
       id: o._id,
       table_id: o.device_id,
@@ -1133,24 +1367,212 @@ app.get('/api/customers', async (req, res) => {
   }
 });
 
+// --- PACKAGES ---
+app.get('/api/admin/packages', async (req, res) => {
+  try {
+    const packages = await Package.find().populate('menu_items');
+    res.json(packages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/admin/packages', async (req, res) => {
+  try {
+    const pkg = new Package(req.body);
+    await pkg.save();
+    res.status(201).json(pkg);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/admin/packages/:id', async (req, res) => {
+  try {
+    const pkg = await Package.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(pkg);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/admin/packages/:id', async (req, res) => {
+  try {
+    await Package.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- BOOKINGS ---
+app.get('/api/bookings', async (req, res) => {
+  try {
+    const bookings = await Booking.find().populate('package_id').sort({ booking_time: 1 });
+    res.json(bookings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/bookings', async (req, res) => {
+  try {
+    const { table_id, booking_time } = req.body;
+    // Conflict check logic (basic: no bookings for the same table within 2 hours)
+    const newTime = new Date(booking_time);
+    const twoHoursBefore = new Date(newTime.getTime() - 2 * 60 * 60 * 1000);
+    const twoHoursAfter = new Date(newTime.getTime() + 2 * 60 * 60 * 1000);
+    
+    const conflict = await Booking.findOne({
+      table_id,
+      status: { $in: ['pending', 'active'] },
+      booking_time: { $gt: twoHoursBefore, $lt: twoHoursAfter }
+    });
+
+    if (conflict) {
+      return res.status(409).json({ error: `Table ${table_id} is already booked around that time.` });
+    }
+
+    const booking = new Booking(req.body);
+    await booking.save();
+    
+    // Instantly track customer in CRM
+    if (booking.mobile && booking.guest_name) {
+      let customer = await Customer.findOne({ mobile: booking.mobile });
+      if (customer) {
+        customer.guest_name = booking.guest_name;
+        customer.last_visit = new Date();
+        await customer.save();
+      } else {
+        customer = new Customer({ guest_name: booking.guest_name, mobile: booking.mobile, total_visits: 0 });
+        await customer.save();
+      }
+    }
+    
+    // If the booking is for now or within the next minute, activate it immediately
+    if (new Date(booking.booking_time).getTime() <= Date.now() + 60000) {
+      setTimeout(() => activateBooking(booking).catch(console.error), 0);
+    }
+    
+    res.status(201).json(booking);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.put('/api/bookings/:id', async (req, res) => {
+  try {
+    const booking = await Booking.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(booking);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.delete('/api/bookings/:id', async (req, res) => {
+  try {
+    await Booking.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function activateBooking(b) {
+  // Create standby TableSession
+  let session = await TableSession.findOne({ device_id: b.table_id, status: { $in: ['active', 'standby'] } });
+  if (!session) {
+    session = new TableSession({ device_id: b.table_id, guest_name: b.guest_name, mobile: b.mobile, status: 'standby' });
+    await session.save();
+  }
+  
+  // Track customer if mobile provided
+  if (b.mobile && b.guest_name) {
+    let customer = await Customer.findOne({ mobile: b.mobile });
+    if (customer) {
+      customer.total_visits += 1;
+      customer.last_visit = new Date();
+      customer.guest_name = b.guest_name;
+      await customer.save();
+    } else {
+      customer = new Customer({ guest_name: b.guest_name, mobile: b.mobile });
+      await customer.save();
+    }
+  }
+  
+  b.status = 'ready';
+  await b.save();
+
+  // Emit socket event to wake kiosk
+  let packageData = null;
+  if (b.package_id) {
+    // If it's already an object (from populate), use its _id
+    const pkgId = b.package_id._id || b.package_id;
+    packageData = await Package.findById(pkgId).populate('menu_items');
+  }
+  
+  io.to(`room_table_${b.table_id}`).emit('session_started', { 
+    session_id: session._id, 
+    guest_name: b.guest_name,
+    mobile: b.mobile,
+    package: packageData
+  });
+  
+  // Refresh Host Stand
+  io.emit('refresh_tables');
+  console.log(`Auto-started booking session for table ${b.table_id}`);
+}
+
+// Background Worker: Automatically activate bookings when their time arrives
+setInterval(async () => {
+  try {
+    const now = new Date();
+    const pendingBookings = await Booking.find({ status: 'pending', booking_time: { $lte: now } }).populate('package_id');
+    
+    for (const b of pendingBookings) {
+      await activateBooking(b);
+    }
+  } catch (err) {
+    console.error('Booking worker error:', err);
+  }
+}, 60000); // Check every minute
+
 // --- SOCKET.IO ---
 
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
   // Device Provisioning (Customers or Staff)
-  socket.on('register_device', ({ device_id, role }) => {
+  socket.on('register_device', async ({ device_id, role }) => {
     if (role === 'Kitchen') {
       socket.join('kds');
       console.log(`Socket ${socket.id} joined KDS room`);
     } else if (device_id) {
       socket.join(`room_table_${device_id}`);
       console.log(`Socket ${socket.id} joined room_table_${device_id}`);
+      
+      if (role === 'Customer') {
+        try {
+          const session = await TableSession.findOne({ device_id, status: { $in: ['active', 'standby'] } });
+          if (session) {
+            const booking = await Booking.findOne({ table_id: device_id, status: { $in: ['active', 'ready'] } }).populate('package_id');
+            socket.emit('session_started', {
+              session_id: session._id,
+              guest_name: session.guest_name,
+              mobile: session.mobile,
+              package: booking ? booking.package_id : null,
+              is_reconnect: true
+            });
+          }
+        } catch (err) {
+          console.error('Error syncing session state:', err);
+        }
+      }
     }
   });
 
   // Host starts a session for a table
-  socket.on('start_session', async ({ device_id, guest_name, mobile }) => {
+  socket.on('start_session', async ({ device_id, guest_name, mobile, package_id }) => {
     try {
       let session = await TableSession.findOne({ device_id, status: 'active' });
       if (!session) {
@@ -1172,11 +1594,41 @@ io.on('connection', (socket) => {
         }
       }
       
+      let packageData = null;
+      if (package_id) {
+        packageData = await Package.findById(package_id).populate('menu_items');
+      }
+
       // Wake up the customer kiosk
-      io.to(`room_table_${device_id}`).emit('session_started', { session_id: session._id, guest_name });
+      io.to(`room_table_${device_id}`).emit('session_started', { 
+        session_id: session._id, 
+        guest_name, 
+        mobile,
+        package: packageData
+      });
       console.log(`Session started for device ${device_id}`);
+      io.emit('refresh_tables');
     } catch (err) {
       console.error('Error starting session:', err);
+    }
+  });
+
+  // Customer taps Kiosk to start session
+  socket.on('customer_started_session', async ({ device_id }) => {
+    try {
+      let session = await TableSession.findOne({ device_id, status: 'standby' });
+      if (session) {
+        session.status = 'active';
+        await session.save();
+      }
+      let booking = await Booking.findOne({ table_id: device_id, status: 'ready' });
+      if (booking) {
+        booking.status = 'active';
+        await booking.save();
+      }
+      io.emit('refresh_tables');
+    } catch (err) {
+      console.error(err);
     }
   });
 
@@ -1184,6 +1636,11 @@ io.on('connection', (socket) => {
     console.log(`Service requested by ${socket.id}: ${message}`);
     // Broadcast to host/staff
     io.emit('service_alert', { message, timestamp: new Date() });
+  });
+
+  socket.on('admin_override_reset', ({ device_id }) => {
+    console.log(`Admin override reset for table ${device_id}`);
+    io.to(`room_table_${device_id}`).emit('session_reset');
   });
 
   socket.on('disconnect', () => {

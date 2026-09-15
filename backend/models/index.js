@@ -15,5 +15,6 @@ module.exports = {
   Shift: require('./Shift'),
   TaxConfig: require('./TaxConfig'),
   Package: require('./Package'),
-  Booking: require('./Booking')
+  Booking: require('./Booking'),
+  Feedback: require('./Feedback')
 };

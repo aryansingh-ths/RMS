@@ -1312,6 +1312,7 @@ const FinancePanel = () => {
   const [filter, setFilter] = React.useState('day');
   const [data, setData] = React.useState(null);
   const [toast, setToast] = React.useState(null);
+  const [viewReceipt, setViewReceipt] = React.useState(null);
 
   const [showAddShift, setShowAddShift] = React.useState(false);
   const [shiftForm, setShiftForm] = React.useState({ name: '', startTime: '', endTime: '' });
@@ -1438,7 +1439,9 @@ const FinancePanel = () => {
                   <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-6 py-4">Order ID</th>
                   <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-4 py-4">Amount</th>
                   <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-4 py-4">Status</th>
+                  <th className="text-left text-[10px] font-bold text-gray-400 uppercase tracking-widest px-4 py-4">Payment</th>
                   <th className="text-right text-[10px] font-bold text-gray-400 uppercase tracking-widest px-6 py-4">Date</th>
+                  <th className="text-right text-[10px] font-bold text-gray-400 uppercase tracking-widest px-6 py-4">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -1447,9 +1450,21 @@ const FinancePanel = () => {
                     <td className="px-6 py-4 font-semibold text-gray-800">{o._id.substring(o._id.length - 8).toUpperCase()}</td>
                     <td className="px-4 py-4 font-bold text-gray-700">₹{o.total_amount.toFixed(2)}</td>
                     <td className="px-4 py-4"><Pill label={o.status} color="green" /></td>
+                    <td className="px-4 py-4">
+                      {o.payment_method ? (
+                        <span className="text-[10px] font-bold px-2 py-1 bg-gray-100 text-gray-600 rounded uppercase">{o.payment_method}</span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-gray-400 italic">N/A</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-right text-gray-500">{new Date(o.createdAt).toLocaleString()}</td>
+                    <td className="px-6 py-4 text-right">
+                      <button onClick={() => setViewReceipt(o)} className="text-[#c59a63] hover:bg-[#c59a63]/10 p-2 rounded-full transition-colors tooltip" title="View Receipt">
+                        <span className="material-symbols-outlined text-[18px]">receipt_long</span>
+                      </button>
+                    </td>
                   </tr>
-                )) : <tr><td colSpan={4} className="text-center text-gray-400 py-12">No transaction history yet.</td></tr>}
+                )) : <tr><td colSpan={6} className="text-center text-gray-400 py-12">No transaction history yet.</td></tr>}
               </tbody>
             </table>
           </Card>
@@ -1540,6 +1555,56 @@ const FinancePanel = () => {
             </table>
           </Card>
         </>
+      )}
+
+      {/* Receipt Modal */}
+      {viewReceipt && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-6" onClick={() => setViewReceipt(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm max-h-[80vh] overflow-y-auto flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white">
+              <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                <span className="material-symbols-outlined text-[#c59a63]">receipt_long</span>
+                Order Receipt
+              </h3>
+              <button onClick={() => setViewReceipt(null)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+            
+            <div className="p-6">
+              <div className="flex justify-between text-xs text-gray-500 mb-6">
+                <div>
+                  <p>Order ID: <span className="font-bold text-gray-700">{viewReceipt._id.substring(viewReceipt._id.length - 8).toUpperCase()}</span></p>
+                  <p>Table: <span className="font-bold text-gray-700">{viewReceipt.device_id || 'N/A'}</span></p>
+                </div>
+                <div className="text-right">
+                  <p>{new Date(viewReceipt.createdAt).toLocaleDateString()}</p>
+                  <p>{new Date(viewReceipt.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+              </div>
+              
+              <div className="space-y-3 mb-6">
+                {viewReceipt.items && viewReceipt.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between text-sm">
+                    <span className="text-gray-600"><span className="font-bold mr-2">{item.qty}x</span>{item.name}</span>
+                    {item.price !== undefined ? (
+                      <span className="font-bold text-gray-800">&#8377;{(item.price * item.qty).toFixed(2)}</span>
+                    ) : (
+                      <span className="text-gray-400 text-xs italic">Included</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              
+              <div className="border-t border-dashed border-gray-300 pt-4 mt-2">
+                <div className="flex justify-between text-lg font-black text-gray-900">
+                  <span>TOTAL</span>
+                  <span>&#8377;{viewReceipt.total_amount.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1663,6 +1728,7 @@ const SystemAdminPanel = () => {
   const [staff, setStaff] = React.useState([]);
   const [hardware, setHardware] = React.useState([]);
   const [logs, setLogs] = React.useState([]);
+  const [feedbacks, setFeedbacks] = React.useState([]);
   const [toast, setToast] = React.useState(null);
 
   const [showAddStaff, setShowAddStaff] = React.useState(false);
@@ -1675,6 +1741,7 @@ const SystemAdminPanel = () => {
     fetch(`${API}/api/admin/staff`).then(r => r.json()).then(setStaff).catch(console.error);
     fetch(`${API}/api/admin/hardware`).then(r => r.json()).then(setHardware).catch(console.error);
     fetch(`${API}/api/admin/auditlogs`).then(r => r.json()).then(setLogs).catch(console.error);
+    fetch(`${API}/api/admin/feedback`).then(r => r.json()).then(setFeedbacks).catch(console.error);
   }, []);
 
   React.useEffect(() => { fetchData(); }, [fetchData]);
@@ -1713,7 +1780,7 @@ const SystemAdminPanel = () => {
       </div>
 
       <div className="flex items-center justify-between">
-        <TabBar tabs={[{ key: 'staff', label: 'Staff' }, { key: 'hardware', label: 'Hardware' }, { key: 'logs', label: 'Audit Logs' }]} active={tab} onChange={setTab} />
+        <TabBar tabs={[{ key: 'staff', label: 'Staff' }, { key: 'hardware', label: 'Hardware' }, { key: 'logs', label: 'Audit Logs' }, { key: 'feedback', label: 'Feedback' }]} active={tab} onChange={setTab} />
 
         {tab === 'staff' && (
           <button onClick={() => setShowAddStaff(!showAddStaff)} className="flex items-center gap-2 px-5 py-2 rounded-full bg-gray-900 text-white text-sm font-bold shadow-md hover:bg-gray-800 transition-all">
@@ -1833,6 +1900,45 @@ const SystemAdminPanel = () => {
                   <td className="px-6 py-4 text-gray-500 text-xs">{l.details}</td>
                 </tr>
               )) : <tr><td colSpan={4} className="text-center text-gray-400 py-12">No audit logs available.</td></tr>}
+            </tbody>
+          </table>
+        </Card>
+      )}
+      {tab === 'feedback' && (
+        <Card className="p-0 overflow-x-auto border-t-4 border-t-[#c59a63]">
+          <div className="p-6 pb-4 border-b border-gray-50 flex items-center justify-between bg-white">
+            <h3 className="text-sm font-black text-gray-800 flex items-center gap-2">
+              <span className="material-symbols-outlined text-[#c59a63] text-[20px]">rate_review</span>
+              Customer Feedback
+            </h3>
+          </div>
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="bg-gray-50/50">
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Date</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Guest & Table</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">Rating</th>
+                <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Comment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {feedbacks.length > 0 ? feedbacks.map(f => (
+                <tr key={f._id} className="border-b border-gray-50 hover:bg-gray-50/30">
+                  <td className="px-6 py-4 text-gray-500 whitespace-nowrap">{new Date(f.createdAt).toLocaleString()}</td>
+                  <td className="px-6 py-4">
+                    <div className="font-bold text-gray-800">{f.guest_name}</div>
+                    <div className="text-xs text-gray-400">Table {f.table_id}</div>
+                  </td>
+                  <td className="px-6 py-4 text-center">
+                    <div className="flex justify-center text-[#c59a63]">
+                      {[1,2,3,4,5].map(star => (
+                        <span key={star} className="material-symbols-outlined text-sm" style={{ fontVariationSettings: `'FILL' ${f.rating >= star ? 1 : 0}` }}>star</span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-gray-600 max-w-md break-words">{f.comment || <span className="text-gray-300 italic">No comment</span>}</td>
+                </tr>
+              )) : <tr><td colSpan={4} className="text-center text-gray-400 py-12">No feedback received yet.</td></tr>}
             </tbody>
           </table>
         </Card>

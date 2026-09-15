@@ -98,7 +98,7 @@ const HostStandPanel = ({ socket }) => {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [modal, setModal] = useState(false);
-  const [form, setForm] = useState({ guestName: '', mobile: '', party: '', bookingMode: 'now', bookingTime: '', packageId: '' });
+  const [form, setForm] = useState({ guestName: '', email: '', mobile: '', party: '', bookingMode: 'now', bookingTime: '', packageId: '', isTakeaway: false });
   const [toast, setToast] = useState(null);
   const [zoneFilter, setZoneFilter] = useState('All');
 
@@ -115,6 +115,7 @@ const HostStandPanel = ({ socket }) => {
         guest: t.guest_name || null,
         mobile: null,
         party: null,
+        auth_code: t.auth_code || null,
       })));
     } catch (e) {
       console.error('Failed to fetch tables', e);
@@ -178,7 +179,7 @@ const HostStandPanel = ({ socket }) => {
     const tzoffset = (new Date()).getTimezoneOffset() * 60000;
     const localISOTime = (new Date(now - tzoffset)).toISOString().slice(0, 16);
     
-    setForm({ guestName: '', mobile: '', party: '', bookingMode: 'now', bookingTime: localISOTime, packageId: '' });
+    setForm({ guestName: '', email: '', mobile: '', party: '', bookingMode: 'now', bookingTime: localISOTime, packageId: '', isTakeaway: false });
   };
 
   const startSession = async (e) => {
@@ -194,6 +195,7 @@ const HostStandPanel = ({ socket }) => {
           body: JSON.stringify({
             table_id: selected.id,
             guest_name: form.guestName,
+            email: form.email,
             mobile: form.mobile,
             party_size: parseInt(form.party) || 1,
             booking_time: new Date(form.bookingTime).toISOString(),
@@ -215,8 +217,11 @@ const HostStandPanel = ({ socket }) => {
       socket.emit('start_session', { 
         device_id: selected.id, 
         guest_name: form.guestName, 
+        email: form.email,
         mobile: form.mobile,
-        package_id: form.packageId || undefined 
+        party_size: parseInt(form.party) || 1,
+        package_id: form.packageId || undefined,
+        is_takeaway: form.isTakeaway
       });
       setTables(prev => prev.map(t => t.id === selected.id
         ? { ...t, status: 'seated', guest: form.guestName, mobile: form.mobile, party: parseInt(form.party) || 1 }
@@ -280,6 +285,11 @@ const HostStandPanel = ({ socket }) => {
                 <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Guest Name *</label>
                 <input required value={form.guestName} onChange={e => setForm(p => ({ ...p, guestName: e.target.value }))} placeholder="e.g. Vance Party" className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
               </div>
+
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 block">Email</label>
+                <input type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} placeholder="e.g. guest@example.com" className="w-full px-4 py-3 rounded-xl border border-gray-100 bg-gray-50 text-sm focus:outline-none focus:border-[#c59a63] transition-colors" />
+              </div>
               
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -300,6 +310,19 @@ const HostStandPanel = ({ socket }) => {
                     <option key={pkg._id} value={pkg._id}>{pkg.name} {pkg.pricing_type === 'free' ? '(Free)' : `(₹${pkg.price}/pp)`}</option>
                   ))}
                 </select>
+              </div>
+
+              <div className="flex items-center gap-3 mt-1 px-1">
+                <input 
+                  type="checkbox" 
+                  id="takeawayToggle"
+                  checked={form.isTakeaway} 
+                  onChange={e => setForm(p => ({ ...p, isTakeaway: e.target.checked }))} 
+                  className="w-4 h-4 text-[#c59a63] border-gray-300 rounded focus:ring-[#c59a63]"
+                />
+                <label htmlFor="takeawayToggle" className="text-sm font-bold text-gray-700 select-none cursor-pointer">
+                  Takeaway Order
+                </label>
               </div>
 
               <button type="submit" className="w-full py-3.5 rounded-xl bg-[#c59a63] hover:bg-[#b8895a] text-white font-bold text-sm shadow-lg shadow-[#c59a63]/30 flex items-center justify-center gap-2 transition-all mt-2">
@@ -367,6 +390,7 @@ const HostStandPanel = ({ socket }) => {
                 <Pill label={style.label} color={style.labelColor} />
                 {table.guest && <p className={`text-sm font-bold mt-2 ${style.text} truncate`}>{table.guest}</p>}
                 {table.party && <p className={`text-[10px] mt-0.5 ${style.text} opacity-60`}>Party of {table.party}</p>}
+                {table.auth_code && <p className={`text-[11px] font-bold mt-1 bg-black/10 px-2 py-1 rounded w-fit ${style.text}`}>PIN: {table.auth_code}</p>}
                 {table.zone && <p className="text-[9px] mt-1 text-gray-400 font-semibold uppercase tracking-widest">{table.zone}</p>}
                 {table.status === 'available' && <p className="text-[10px] mt-2 text-gray-400">Tap to seat guests</p>}
               </div>
@@ -403,6 +427,8 @@ const TableManagementPanel = () => {
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [editingCapacityId, setEditingCapacityId] = useState(null);
+  const [editingCapacityValue, setEditingCapacityValue] = useState('');
 
   // Extract unique zones from existing tables
   const existingZones = [...new Set(tables.map(t => t.zone))].filter(Boolean);
@@ -449,6 +475,28 @@ const TableManagementPanel = () => {
       fetchTables();
     } catch { showToast('Server error.', 'error'); }
     finally { setConfirmDelete(null); }
+  };
+
+  const handleUpdateCapacity = async (tableId, currentStatus) => {
+    if (currentStatus === 'occupied') {
+      showToast('Cannot change capacity of occupied table.', 'error');
+      setEditingCapacityId(null);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`${API}/api/tables/${tableId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ capacity: parseInt(editingCapacityValue) }),
+      });
+      const data = await res.json();
+      if (!res.ok) { showToast(data.error || 'Failed to update capacity.', 'error'); return; }
+      showToast(`Table ${tableId} capacity updated.`);
+      setEditingCapacityId(null);
+      fetchTables();
+    } catch { showToast('Server error.', 'error'); }
+    finally { setSubmitting(false); }
   };
 
   return (
@@ -548,9 +596,39 @@ const TableManagementPanel = () => {
                   <td className="px-6 py-4 font-semibold text-gray-600">{t.label}</td>
                   <td className="px-6 py-4 text-gray-500">{t.zone}</td>
                   <td className="px-6 py-4">
-                    <span className="flex items-center gap-1 text-gray-500">
-                      <span className="material-symbols-outlined text-[14px]">person</span>{t.capacity}
-                    </span>
+                    {editingCapacityId === t.table_id ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min="1"
+                          max="30"
+                          value={editingCapacityValue}
+                          onChange={e => setEditingCapacityValue(e.target.value)}
+                          className="w-16 px-2 py-1 rounded border border-gray-200 text-sm focus:outline-none focus:border-[#c59a63]"
+                          autoFocus
+                        />
+                        <button onClick={() => handleUpdateCapacity(t.table_id, t.sessionStatus)} disabled={submitting} className="text-emerald-500 hover:text-emerald-600 transition-colors">
+                          <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                        </button>
+                        <button onClick={() => setEditingCapacityId(null)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                          <span className="material-symbols-outlined text-[16px]">cancel</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="flex items-center gap-1 text-gray-500 group">
+                        <span className="material-symbols-outlined text-[14px]">person</span>{t.capacity}
+                        <button onClick={() => {
+                          if (t.sessionStatus === 'occupied') {
+                            showToast('Cannot change capacity of occupied table.', 'error');
+                            return;
+                          }
+                          setEditingCapacityId(t.table_id);
+                          setEditingCapacityValue(t.capacity);
+                        }} className="ml-2 text-gray-300 opacity-0 group-hover:opacity-100 hover:text-[#c59a63] transition-all">
+                          <span className="material-symbols-outlined text-[14px]">edit</span>
+                        </button>
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4">
                     {t.sessionStatus === 'occupied'
@@ -678,8 +756,14 @@ const KDSPanel = ({ socket }) => {
               {/* Ticket Header */}
               <div className={`${compactView ? 'px-4 py-3' : 'px-5 py-4'} border-b border-gray-50 flex items-center justify-between`}>
                 <div>
-                  <p className="text-[9px] font-black text-gray-300 uppercase tracking-widest">Ticket ID</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[9px] font-black text-gray-300 uppercase tracking-widest">Ticket ID</p>
+                    {order.order_type === 'takeaway' && <span className="bg-orange-100 text-orange-700 text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-widest">Takeaway</span>}
+                  </div>
                   <h3 className={`${compactView ? 'text-sm' : 'text-base'} font-black text-gray-900`}>{order.id}</h3>
+                  <p className="text-[10px] font-bold text-gray-500 mt-0.5">
+                    {order.order_type === 'takeaway' ? `Takeaway (Table ${order.table_id})` : `Table ${order.table_id}`}
+                  </p>
                 </div>
                 <SLATimer startTime={order.time} />
               </div>
@@ -807,6 +891,46 @@ const CustomerDetailsPanel = () => {
 
 // ─── Panel 6: Order History ───────────────────────────────────────────────────
 
+const OrderHistoryRow = ({ o }) => {
+  const [expanded, setExpanded] = useState(false);
+  const itemsToShow = expanded ? o.items : o.items.slice(0, 3);
+  
+  return (
+    <tr className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
+      <td className="px-6 py-4 font-black text-gray-800 align-top">
+        {o.order_type === 'takeaway' ? (
+          <span className="flex items-center gap-1"><span className="material-symbols-outlined text-[14px] text-orange-400">takeout_dining</span> Takeaway</span>
+        ) : o.table_id}
+      </td>
+      <td className="px-6 py-4 align-top">
+        {itemsToShow.map((item, idx) => (
+          <div key={idx} className="text-xs text-gray-600 mb-1">
+            <span className="font-bold">{item.qty}x</span> {item.name}
+          </div>
+        ))}
+        {o.items.length > 3 && (
+          <button 
+            onClick={() => setExpanded(!expanded)} 
+            className="text-[10px] font-bold text-[#c59a63] uppercase tracking-widest mt-2 hover:text-[#b8895a]"
+          >
+            {expanded ? 'Show Less' : `+ ${o.items.length - 3} More Items`}
+          </button>
+        )}
+      </td>
+      <td className="px-6 py-4 align-top">
+        <span className={`inline-flex items-center justify-center h-6 px-3 rounded-full font-bold text-[10px] uppercase tracking-widest ${
+          o.status === 'paid' ? 'bg-emerald-50 text-emerald-600' : 'bg-blue-50 text-blue-600'
+        }`}>
+          {o.status}
+        </span>
+      </td>
+      <td className="px-6 py-4 text-gray-500 text-xs font-semibold align-top">
+        {new Date(o.completedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+      </td>
+    </tr>
+  );
+};
+
 const OrderHistoryPanel = () => {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -879,26 +1003,7 @@ const OrderHistoryPanel = () => {
               <tr><td colSpan={4} className="text-center py-12 text-gray-300 text-sm">No historical orders found.</td></tr>
             )}
             {orders.map(o => (
-              <tr key={o.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                <td className="px-6 py-4 font-black text-gray-800">{o.table_id}</td>
-                <td className="px-6 py-4">
-                  {o.items.map((item, idx) => (
-                    <div key={idx} className="text-xs text-gray-600 mb-1">
-                      <span className="font-bold">{item.qty}x</span> {item.name}
-                    </div>
-                  ))}
-                </td>
-                <td className="px-6 py-4">
-                  <span className={`inline-flex items-center justify-center h-6 px-3 rounded-full font-bold text-[10px] uppercase tracking-widest ${
-                    o.status === 'paid' ? 'bg-emerald-50 text-emerald-600' : 'bg-blue-50 text-blue-600'
-                  }`}>
-                    {o.status}
-                  </span>
-                </td>
-                <td className="px-6 py-4 text-gray-500 text-xs font-semibold">
-                  {new Date(o.completedAt).toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                </td>
-              </tr>
+              <OrderHistoryRow key={o.id} o={o} />
             ))}
           </tbody>
         </table>

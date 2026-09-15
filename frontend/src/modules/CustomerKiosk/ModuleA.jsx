@@ -159,6 +159,7 @@ const AdminPinModal = ({ onSuccess, onCancel }) => {
   const [digits, setDigits] = useState(['', '', '', '']);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPin, setShowPin] = useState(false);
   const refs = [useRef(), useRef(), useRef(), useRef()];
 
   const handleDigit = (idx, val) => {
@@ -205,16 +206,27 @@ const AdminPinModal = ({ onSuccess, onCancel }) => {
             <input
               key={i}
               ref={refs[i]}
-              type="password"
+              type={showPin ? 'text' : 'password'}
               maxLength={1}
               value={d}
               onChange={e => handleDigit(i, e.target.value)}
               onKeyDown={e => handleKey(i, e)}
-              className={`w-12 h-14 text-center text-xl font-black rounded-2xl border-2 outline-none transition-all ${error ? 'border-red-300 bg-red-50' : 'border-gray-100 bg-gray-50 focus:border-[#c59a63] focus:bg-white'
-                }`}
+              className={`w-12 h-14 text-center text-xl font-black rounded-2xl border-2 outline-none transition-all [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-contacts-auto-fill-button]:hidden ${error ? 'border-red-300 bg-red-50' : 'border-gray-100 bg-gray-50 focus:border-[#c59a63] focus:bg-white'}`}
               autoFocus={i === 0}
             />
           ))}
+        </div>
+
+        <div className="flex justify-center mb-4">
+          <button 
+            onClick={() => setShowPin(!showPin)} 
+            className="text-[11px] font-bold text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
+          >
+            <span className="material-symbols-outlined text-[14px]">
+              {showPin ? 'visibility_off' : 'visibility'}
+            </span>
+            {showPin ? 'Hide PIN' : 'Show PIN'}
+          </button>
         </div>
 
         {error && <p className="text-xs font-bold text-red-500 mb-4">{error}</p>}
@@ -364,8 +376,11 @@ const CustomizerModal = ({ item, onConfirm, onCancel }) => {
 
 // ΓöÇΓöÇΓöÇ Cart Drawer ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-const CartDrawer = ({ cart, onClose, onCheckout, onRemove, onQty, taxConfig }) => {
-  const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+const CartDrawer = ({ cart, onClose, onCheckout, onRemove, onQty, taxConfig, packageData, partySize, isFirstOrder }) => {
+  const packageFee = (isFirstOrder && packageData) ? (packageData.pricing_type === 'per_person' ? (packageData.price || 0) * (partySize || 1) : (packageData.price || 0)) : 0;
+  
+  const itemsSubtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const subtotal = itemsSubtotal + packageFee;
   
   const activeTaxes = Array.isArray(taxConfig) ? taxConfig.filter(t => t.is_active) : [];
   const taxBreakdown = activeTaxes.map(t => ({
@@ -419,6 +434,14 @@ const CartDrawer = ({ cart, onClose, onCheckout, onRemove, onQty, taxConfig }) =
           <div className="px-6 pb-8 border-t border-gray-50 pt-4">
             <div className="flex flex-col gap-2 mb-4">
               <div className="flex justify-between text-xs text-gray-400 font-semibold">
+                <span>Items Subtotal</span><span>&#8377;{itemsSubtotal.toFixed(2)}</span>
+              </div>
+              {packageFee > 0 && (
+                <div className="flex justify-between text-xs text-[#c59a63] font-semibold">
+                  <span>Package Fee</span><span>&#8377;{packageFee.toFixed(2)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-xs text-gray-400 font-semibold border-t border-gray-50 pt-2 mt-1">
                 <span>Subtotal</span><span>&#8377;{subtotal.toFixed(2)}</span>
               </div>
               {taxBreakdown.map((t, idx) => (
@@ -430,7 +453,7 @@ const CartDrawer = ({ cart, onClose, onCheckout, onRemove, onQty, taxConfig }) =
                 <span>Total</span><span className="text-[#c59a63] text-lg">&#8377;{total.toFixed(2)}</span>
               </div>
             </div>
-            <button onClick={() => onCheckout(total)}
+            <button onClick={() => onCheckout(total, taxBreakdown)}
               className="w-full py-4 rounded-2xl bg-[#c59a63] text-white font-black text-base shadow-xl hover:bg-[#b8895a] transition-all flex items-center justify-center gap-2">
               <span className="material-symbols-outlined text-[20px]">contactless</span>
               Pay & Send to Kitchen — &#8377;{total.toFixed(2)}
@@ -445,14 +468,70 @@ const CartDrawer = ({ cart, onClose, onCheckout, onRemove, onQty, taxConfig }) =
 // ΓöÇΓöÇΓöÇ Payment Screen ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
 const PaymentScreen = ({ total, onSuccess, onCancel }) => {
+  const [paymentMethod, setPaymentMethod] = useState(null);
   const [status, setStatus] = useState('awaiting');
-  const txRef = `TXN-${Date.now().toString(36).toUpperCase()}`;
+  const txRef = useRef(`TXN-${Date.now().toString(36).toUpperCase()}`).current;
 
   useEffect(() => {
-    const t1 = setTimeout(() => setStatus('processing'), 2000);
-    const t2 = setTimeout(() => { setStatus('confirmed'); onSuccess(); }, 5000);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [onSuccess]);
+    if (!paymentMethod) return;
+    setStatus('processing');
+    const t1 = setTimeout(() => { setStatus('confirmed'); onSuccess(paymentMethod); }, 3000);
+    return () => clearTimeout(t1);
+  }, [paymentMethod, onSuccess]);
+
+  if (!paymentMethod) {
+    return (
+      <div className="min-h-screen bg-[#f5f4f0] flex flex-col items-center justify-center p-6 relative overflow-hidden"
+        style={{ backgroundImage: 'radial-gradient(#c59a6330 2px, transparent 2px)', backgroundSize: '28px 28px' }}>
+        <BG />
+        <div className="bg-white rounded-[32px] p-8 w-full max-w-md shadow-[0_8px_32px_rgb(0,0,0,0.06)] text-center relative z-10 flex flex-col gap-6">
+          <div className="flex items-center gap-3">
+            <button onClick={onCancel} className="w-9 h-9 rounded-xl bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-gray-100 transition-colors">
+              <span className="material-symbols-outlined text-[18px]">arrow_back</span>
+            </button>
+            <div className="text-left">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Secure Checkout</p>
+              <h2 className="text-lg font-black text-gray-800">Select Payment Method</h2>
+            </div>
+          </div>
+          
+          <p className="text-3xl font-black text-[#c59a63]">&#8377;{total.toFixed(2)}</p>
+
+          <div className="grid grid-cols-1 gap-4">
+            <button onClick={() => setPaymentMethod('upi')} className="flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 hover:border-[#c59a63] hover:bg-orange-50/50 transition-all text-left">
+              <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center">
+                <span className="material-symbols-outlined text-[#c59a63]">qr_code_2</span>
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800 text-base">Pay via UPI</h3>
+                <p className="text-xs text-gray-500">Scan QR Code</p>
+              </div>
+            </button>
+
+            <button onClick={() => setPaymentMethod('card')} className="flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 hover:border-[#c59a63] hover:bg-orange-50/50 transition-all text-left">
+              <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center">
+                <span className="material-symbols-outlined text-[#c59a63]">credit_card</span>
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800 text-base">Pay via Card</h3>
+                <p className="text-xs text-gray-500">Tap or Insert Card</p>
+              </div>
+            </button>
+
+            <button onClick={() => setPaymentMethod('cash')} className="flex items-center gap-4 p-4 rounded-2xl border-2 border-gray-100 hover:border-[#c59a63] hover:bg-orange-50/50 transition-all text-left">
+              <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center">
+                <span className="material-symbols-outlined text-[#c59a63]">payments</span>
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800 text-base">Pay via Cash</h3>
+                <p className="text-xs text-gray-500">Host will collect cash</p>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f5f4f0] flex flex-col items-center justify-center p-6 relative overflow-hidden"
@@ -460,30 +539,45 @@ const PaymentScreen = ({ total, onSuccess, onCancel }) => {
       <BG />
       <div className="bg-white rounded-[32px] p-8 w-full max-w-sm shadow-[0_8px_32px_rgb(0,0,0,0.06)] text-center relative z-10">
         <div className="flex items-center gap-3 mb-6">
-          <button onClick={onCancel} className="w-9 h-9 rounded-xl bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-gray-100 transition-colors">
+          <button onClick={() => setPaymentMethod(null)} className="w-9 h-9 rounded-xl bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-gray-100 transition-colors">
             <span className="material-symbols-outlined text-[18px]">arrow_back</span>
           </button>
           <div className="text-left">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Secure Checkout</p>
-            <h2 className="text-lg font-black text-gray-800">Payment Gateway</h2>
+            <h2 className="text-lg font-black text-gray-800">
+              {paymentMethod === 'upi' ? 'UPI Payment' : paymentMethod === 'card' ? 'Card Payment' : 'Cash Payment'}
+            </h2>
           </div>
         </div>
-        <div className="w-48 h-48 mx-auto bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center mb-4">
-          <span className="material-symbols-outlined text-gray-300 text-6xl">qr_code_2</span>
-          <p className="text-xs text-gray-400 mt-2">UPI QR Code</p>
-        </div>
+
+        {paymentMethod === 'upi' && (
+          <div className="w-48 h-48 mx-auto bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center mb-4">
+            <span className="material-symbols-outlined text-gray-300 text-6xl">qr_code_2</span>
+            <p className="text-xs text-gray-400 mt-2">Scan with any UPI app</p>
+          </div>
+        )}
+
+        {paymentMethod === 'card' && (
+          <div className="w-48 h-48 mx-auto bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center mb-4">
+            <span className="material-symbols-outlined text-gray-300 text-6xl">contactless</span>
+            <p className="text-xs text-gray-400 mt-2">Tap your card on the terminal</p>
+          </div>
+        )}
+
+        {paymentMethod === 'cash' && (
+          <div className="w-48 h-48 mx-auto bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl flex flex-col items-center justify-center mb-4">
+            <span className="material-symbols-outlined text-gray-300 text-6xl">payments</span>
+            <p className="text-xs text-gray-400 mt-2 text-center px-4">Our host is on the way to collect cash</p>
+          </div>
+        )}
+        
         <p className="text-2xl font-black text-[#c59a63] mb-1">&#8377;{total.toFixed(2)}</p>
         <p className="text-xs text-gray-400 mb-6 font-mono">Ref: {txRef}</p>
-        <div className={`flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold mb-4 transition-all ${status === 'confirmed' ? 'bg-emerald-50 text-emerald-700' : status === 'processing' ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500'}`}>
+        <div className={`flex items-center justify-center gap-2 px-4 py-3 rounded-2xl text-sm font-bold mb-4 transition-all ${status === 'confirmed' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
           <span className={`material-symbols-outlined text-[18px] ${status === 'processing' ? 'animate-spin' : ''}`}>
-            {status === 'confirmed' ? 'check_circle' : status === 'processing' ? 'autorenew' : 'schedule'}
+            {status === 'confirmed' ? 'check_circle' : 'autorenew'}
           </span>
-          {status === 'confirmed' ? 'Payment Confirmed!' : status === 'processing' ? 'Processing...' : 'Awaiting Scan'}
-        </div>
-        <div className="flex justify-center gap-4 text-xs text-gray-400">
-          {[['qr_code_2', 'UPI'], ['contactless', 'NFC'], ['credit_card', 'Card']].map(([icon, label]) => (
-            <span key={label} className="flex items-center gap-1"><span className="material-symbols-outlined text-[14px]">{icon}</span>{label}</span>
-          ))}
+          {status === 'confirmed' ? 'Payment Confirmed!' : 'Processing...'}
         </div>
       </div>
     </div>
@@ -492,13 +586,25 @@ const PaymentScreen = ({ total, onSuccess, onCancel }) => {
 
 // ΓöÇΓöÇΓöÇ Phase 3: Success Screen & Modals ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-const FeedbackModal = ({ onClose }) => {
+const FeedbackModal = ({ onClose, tableId, guestName }) => {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (rating === 0) return;
+    setSubmitting(true);
+    try {
+      await fetch(`${API}/api/kiosk/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ table_id: tableId, guest_name: guestName, rating, comment })
+      });
+    } catch (e) {
+      console.error(e);
+    }
+    setSubmitting(false);
     setSubmitted(true);
     setTimeout(onClose, 2000);
   };
@@ -538,15 +644,19 @@ const FeedbackModal = ({ onClose }) => {
 
         <div className="flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 rounded-xl font-bold text-gray-500 bg-gray-100 hover:bg-gray-200">Cancel</button>
-          <button onClick={handleSubmit} disabled={rating === 0} className="flex-1 py-3 rounded-xl font-bold text-white bg-[#c59a63] hover:bg-[#b8895a] disabled:opacity-50 transition-colors">Submit</button>
+          <button onClick={handleSubmit} disabled={rating === 0 || submitting} className="flex-1 py-3 rounded-xl font-bold text-white bg-[#c59a63] hover:bg-[#b8895a] disabled:opacity-50 transition-colors">
+            {submitting ? 'Submitting...' : 'Submit'}
+          </button>
         </div>
       </div>
     </div>
   );
 };
 
-const InvoiceModal = ({ total, items, tableId, taxConfig, guestName, onClose }) => {
-  const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
+const InvoiceModal = ({ total, items, tableId, taxConfig, guestName, packageData, partySize, onClose }) => {
+  const [sending, setSending] = useState(false);
+  const packageFee = packageData ? (packageData.pricing_type === 'per_person' ? (packageData.price || 0) * (partySize || 1) : (packageData.price || 0)) : 0;
+  const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0) + packageFee;
   const activeTaxes = Array.isArray(taxConfig) ? taxConfig.filter(t => t.is_active) : [];
   const taxBreakdown = activeTaxes.map(t => ({
     label: `${t.name} (${(t.rate * 100).toFixed(0)}%)`,
@@ -554,9 +664,25 @@ const InvoiceModal = ({ total, items, tableId, taxConfig, guestName, onClose }) 
   }));
   const orderId = `ORD-${Math.floor(Date.now() / 1000).toString().slice(-6)}`;
 
+  const handleSendReceipt = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`${API}/api/kiosk/send-receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: tableId, items, total, taxBreakdown })
+      });
+      if (res.ok) alert('Receipt sent to your email successfully!');
+      else alert('Failed to send receipt. Please ensure you provided an email at booking.');
+    } catch(e) {
+      alert('Network error while sending receipt.');
+    }
+    setSending(false);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
-      <div className="bg-[#faf9f6] p-8 w-full max-w-sm max-h-[90vh] overflow-y-auto shadow-2xl relative" style={{ borderRadius: '12px' }}>
+    <div className="fixed inset-0 z-[300] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm">
+      <div className="bg-[#faf9f6] p-8 w-full max-w-sm max-h-[90vh] overflow-y-auto shadow-2xl relative [&::-webkit-scrollbar]:hidden" style={{ borderRadius: '12px', msOverflowStyle: 'none', scrollbarWidth: 'none' }}>
         {/* Receipt jagged edge effect using CSS */}
         <div className="absolute top-0 left-0 right-0 h-3 bg-repeat-x" style={{ backgroundImage: 'radial-gradient(circle at 10px 0, transparent 10px, #faf9f6 11px)', backgroundSize: '20px 20px', marginTop: '-10px' }} />
 
@@ -578,6 +704,15 @@ const InvoiceModal = ({ total, items, tableId, taxConfig, guestName, onClose }) 
         </div>
 
         <div className="space-y-4 mb-6">
+          {packageData && (
+            <div className="flex justify-between text-sm">
+              <span className="text-gray-600">
+                <span className="font-bold mr-2">{packageData.pricing_type === 'per_person' ? `${partySize || 1}x` : '1x'}</span>
+                {packageData.name} Package
+              </span>
+              <span className="font-bold text-gray-800 tabular-nums">&#8377;{packageFee.toFixed(2)}</span>
+            </div>
+          )}
           {items.map((item, idx) => (
             <div key={idx} className="flex justify-between text-sm">
               <span className="text-gray-600"><span className="font-bold mr-2">{item.qty}x</span>{item.name}</span>
@@ -606,9 +741,13 @@ const InvoiceModal = ({ total, items, tableId, taxConfig, guestName, onClose }) 
           </div>
         </div>
 
-        <button className="w-full py-4 mb-3 rounded-xl bg-gray-900 text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-black transition-all">
-          <span className="material-symbols-outlined text-[18px]">send_to_mobile</span>
-          Get Receipt on Phone
+        <button 
+          onClick={handleSendReceipt} 
+          disabled={sending}
+          className="w-full py-4 mb-3 rounded-xl bg-gray-900 text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-black transition-all disabled:opacity-50"
+        >
+          {sending ? <span className="material-symbols-outlined animate-spin text-[18px]">autorenew</span> : <span className="material-symbols-outlined text-[18px]">mail</span>}
+          {sending ? 'Sending...' : 'Get Receipt via Email'}
         </button>
 
         <button onClick={onClose} className="w-full py-3 rounded-xl font-bold text-gray-500 hover:bg-gray-200 transition-colors">Close</button>
@@ -617,8 +756,19 @@ const InvoiceModal = ({ total, items, tableId, taxConfig, guestName, onClose }) 
   );
 };
 
-const SuccessScreen = ({ guestName, tableId, total, itemCount, mobile, onOrderMore, socket, cart, taxConfig }) => {
-  const [timeLeft, setTimeLeft] = useState(15 * 60);
+const SuccessScreen = ({ guestName, tableId, total, itemCount, mobile, onOrderMore, socket, cart, taxConfig, packageData, partySize }) => {
+  const [timeLeft, setTimeLeft] = useState(() => {
+    let orderTimeStr = localStorage.getItem('pragati_kiosk_order_time');
+    let orderTime;
+    if (!orderTimeStr || isNaN(parseInt(orderTimeStr, 10))) {
+      orderTime = Date.now();
+      localStorage.setItem('pragati_kiosk_order_time', orderTime.toString());
+    } else {
+      orderTime = parseInt(orderTimeStr, 10);
+    }
+    const elapsed = Math.floor((Date.now() - orderTime) / 1000);
+    return Math.max(0, (15 * 60) - elapsed);
+  });
   const [orderStatus, setOrderStatus] = useState(() => localStorage.getItem('pragati_kiosk_order_status') || 'preparing'); // preparing | ready
   const [showFeedback, setShowFeedback] = useState(false);
   const [showInvoice, setShowInvoice] = useState(false);
@@ -637,10 +787,16 @@ const SuccessScreen = ({ guestName, tableId, total, itemCount, mobile, onOrderMo
   useEffect(() => {
     if (orderStatus === 'ready' || timeLeft <= 0) return;
     const t = setInterval(() => {
-      setTimeLeft(prev => prev - 1);
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(t);
+          return 0;
+        }
+        return prev - 1;
+      });
     }, 1000);
     return () => clearInterval(t);
-  }, [timeLeft, orderStatus]);
+  }, [orderStatus]);
 
   const isDelayed = timeLeft <= 0;
   const mins = Math.floor(Math.max(0, timeLeft) / 60);
@@ -668,8 +824,8 @@ const SuccessScreen = ({ guestName, tableId, total, itemCount, mobile, onOrderMo
         </span>
       </div>
 
-      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
-      {showInvoice && <InvoiceModal total={total} items={cart} tableId={tableId} taxConfig={taxConfig} guestName={guestName} onClose={() => setShowInvoice(false)} />}
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} tableId={tableId} guestName={guestName} />}
+      {showInvoice && <InvoiceModal total={total} items={cart} tableId={tableId} taxConfig={taxConfig} guestName={guestName} packageData={packageData} partySize={partySize} onClose={() => setShowInvoice(false)} />}
 
       <div className={`${orderStatus === 'ready' ? 'bg-white shadow-[0_8px_32px_rgb(0,0,0,0.06)]' : 'bg-transparent backdrop-blur-md border border-white/20 shadow-[0_8px_32px_rgb(0,0,0,0.1)]'} rounded-[32px] p-8 w-full max-w-sm text-center relative z-10 transition-all duration-500`}>
         {orderStatus === 'ready' ? (
@@ -740,20 +896,29 @@ const SuccessScreen = ({ guestName, tableId, total, itemCount, mobile, onOrderMo
 
 // ΓöÇΓöÇΓöÇ Menu Screen ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
-const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindRequest }) => {
-  const [category, setCategory] = useState(packageData ? packageData.name : 'All Dishes');
+const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, partySize, onUnbindRequest }) => {
+  const [category, setCategory] = useState('All Dishes');
   const [searchQuery, setSearchQuery] = useState('');
   const [dietFilter, setDietFilter] = useState([]);
   const [cart, setCart] = useState(() => {
     const saved = localStorage.getItem('pragati_kiosk_cart');
     return saved ? JSON.parse(saved) : [];
   });
+  const [orderHistory, setOrderHistory] = useState(() => {
+    const saved = localStorage.getItem('pragati_kiosk_order_history');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [cartOpen, setCartOpen] = useState(false);
+  const [vegOnly, setVegOnly] = useState(false);
   const [customizerItem, setCustomizerItem] = useState(null);
   const [subScreen, setSubScreen] = useState(() => localStorage.getItem('pragati_kiosk_subscreen') || 'menu'); // menu | payment | success
   const [checkoutTotal, setCheckoutTotal] = useState(() => {
     const saved = localStorage.getItem('pragati_kiosk_checkout_total');
     return saved ? parseFloat(saved) : 0;
+  });
+  const [checkoutTaxes, setCheckoutTaxes] = useState(() => {
+    const saved = localStorage.getItem('pragati_kiosk_checkout_taxes');
+    return saved ? JSON.parse(saved) : [];
   });
   const [toast, setToast] = useState({ visible: false, message: '' });
   const [liveMenuItems, setLiveMenuItems] = useState([]);
@@ -765,7 +930,9 @@ const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindR
     localStorage.setItem('pragati_kiosk_cart', JSON.stringify(cart));
     localStorage.setItem('pragati_kiosk_subscreen', subScreen);
     localStorage.setItem('pragati_kiosk_checkout_total', checkoutTotal.toString());
-  }, [cart, subScreen, checkoutTotal]);
+    localStorage.setItem('pragati_kiosk_checkout_taxes', JSON.stringify(checkoutTaxes));
+    localStorage.setItem('pragati_kiosk_order_history', JSON.stringify(orderHistory));
+  }, [cart, subScreen, checkoutTotal, checkoutTaxes, orderHistory]);
 
 
 
@@ -799,18 +966,21 @@ const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindR
     setToast({ visible: true, message });
     setTimeout(() => setToast(p => ({ ...p, visible: false })), 2500);
   }, []);
+  const baseItems = packageData 
+    ? liveMenuItems.filter(item => packageData.menu_items.some(pi => pi._id === (item._id || item.id) || pi === (item._id || item.id)))
+    : liveMenuItems;
 
-  const uniqueCategories = ['All Dishes', ...(packageData ? [packageData.name] : []), ...new Set([...customCategories.map(c => c.name), ...liveMenuItems.map(i => i.category || 'General')])];
+  const uniqueCategories = packageData 
+    ? ['All Dishes', ...new Set(baseItems.map(i => i.category || 'General'))]
+    : ['All Dishes', ...new Set([...customCategories.map(c => c.name), ...liveMenuItems.map(i => i.category || 'General')])];
 
-  let filtered = liveMenuItems.filter(item => {
-    if (category !== 'All Dishes' && category !== 'All' && category !== (packageData ? packageData.name : '') && item.category !== category) return false;
+  let filtered = baseItems.filter(item => {
+    if (category !== 'All Dishes' && category !== 'All' && item.category !== category) return false;
 
-    if (category === (packageData ? packageData.name : '')) {
-      const isPackageItem = packageData.menu_items.some(pi => pi._id === item._id || pi === item._id);
-      if (!isPackageItem) return false;
-    }
+    // Check Veg Only toggle
+    if (vegOnly && !item.is_veg) return false;
 
-    // Check Veg/Non-Veg
+    // Check Veg/Non-Veg from filter pills
     if (dietFilter.includes('Pure Veg') && !item.is_veg) return false;
     if (dietFilter.includes('Non-Veg') && item.is_veg) return false;
 
@@ -829,7 +999,7 @@ const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindR
     return true;
   });
 
-  if (category === (packageData ? packageData.name : '') && packageData?.pricing_type === 'free') {
+  if (packageData && packageData.pricing_type === 'per_person') {
     filtered = filtered.map(item => ({ ...item, price: 0 }));
   }
 
@@ -847,11 +1017,32 @@ const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindR
   const changeQty = (idx, delta) => setCart(prev => {
     const u = [...prev]; u[idx] = { ...u[idx], qty: Math.max(1, u[idx].qty + delta) }; return u;
   });
+
+  const handleQtyChange = (item, delta) => {
+    const idx = cart.findIndex(c => (c._id || c.id) === (item._id || item.id));
+    if (idx === -1) return;
+    if (cart[idx].qty === 1 && delta === -1) removeFromCart(idx);
+    else changeQty(idx, delta);
+  };
+
   const totalItems = cart.reduce((s, i) => s + i.qty, 0);
 
-  const handleCheckout = (total) => { setCartOpen(false); setCheckoutTotal(total); setSubScreen('payment'); };
+  const handleCheckout = (total, taxes) => { setCartOpen(false); setCheckoutTotal(total); setCheckoutTaxes(taxes); setSubScreen('payment'); };
 
-  const handlePaySuccess = useCallback(async () => {
+  const hasActiveOrder = !!localStorage.getItem('pragati_kiosk_order_status');
+
+  const handlePaySuccess = useCallback(async (paymentMethod) => {
+    const submittedItems = cart.map(item => ({
+      id: item._id || item.id,
+      menu_item_id: item._id || item.id,
+      name: item.name,
+      qty: item.qty,
+      mods: item.selections ? Object.values(item.selections).flat() : [],
+      note: item.note || '',
+      category: item.category,
+      price: item.price
+    }));
+
     try {
       await fetch(`${API}/api/kiosk/order`, {
         method: 'POST',
@@ -859,34 +1050,43 @@ const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindR
         body: JSON.stringify({
           table_id: tableId,
           total: checkoutTotal,
-          items: cart.map(item => ({
-            id: item._id || item.id,
-            name: item.name,
-            qty: item.qty,
-            mods: item.selections ? Object.values(item.selections).flat() : [],
-            note: item.note || '',
-            category: item.category
-          }))
+          taxes: checkoutTaxes,
+          payment_method: paymentMethod,
+          items: submittedItems
         })
       });
     } catch (e) {
       console.error('Failed to send order', e);
     }
 
+    setOrderHistory(prev => [...prev, ...submittedItems]);
+    localStorage.setItem('pragati_kiosk_order_time', Date.now().toString());
     socket?.emit('payment_confirmed', { table_id: tableId });
     setSubScreen('success');
-  }, [checkoutTotal, tableId, socket, cart]);
+  }, [checkoutTotal, checkoutTaxes, tableId, socket, cart]);
 
   const toggleDiet = (tag) => setDietFilter(prev => prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]);
 
-  if (subScreen === 'payment') return <PaymentScreen total={checkoutTotal} onSuccess={handlePaySuccess} onCancel={() => setSubScreen('menu')} />;
-  if (subScreen === 'success') return <SuccessScreen guestName={guestName} tableId={tableId} total={checkoutTotal} itemCount={cart.reduce((s, i) => s + i.qty, 0)} mobile={mobile} onOrderMore={() => { setCart([]); setSubScreen('menu'); }} socket={socket} cart={cart} taxConfig={taxConfig} />;
+  const packageFee = packageData ? (packageData.pricing_type === 'per_person' ? (packageData.price || 0) * (partySize || 1) : (packageData.price || 0)) : 0;
+  
+  // For checkout, we use the current cart's total
+  const currentFinalTotal = checkoutTotal;
+  
+  const activeTaxes = Array.isArray(taxConfig) ? taxConfig.filter(t => t.is_active) : [];
+
+  // For receipts, we compute the cumulative total from all past orders in the session
+  const cumulativeSubtotal = orderHistory.reduce((s, i) => s + (i.price * i.qty), 0) + packageFee;
+  const cumulativeTotalTaxes = activeTaxes.reduce((s, t) => s + (cumulativeSubtotal * t.rate), 0);
+  const cumulativeFinalTotal = cumulativeSubtotal + cumulativeTotalTaxes;
+
+  if (subScreen === 'payment') return <PaymentScreen total={currentFinalTotal} onSuccess={handlePaySuccess} onCancel={() => setSubScreen('menu')} />;
+  if (subScreen === 'success') return <SuccessScreen guestName={guestName} tableId={tableId} total={cumulativeFinalTotal} itemCount={orderHistory.reduce((s, i) => s + i.qty, 0)} mobile={mobile} onOrderMore={() => { setCart([]); setSubScreen('menu'); }} socket={socket} cart={orderHistory} taxConfig={taxConfig} packageData={packageData} partySize={partySize} />;
 
   return (
     <div className="min-h-screen bg-[#fdfaf6] font-sans antialiased text-gray-800">
       <Toast message={toast.message} visible={toast.visible} />
       {customizerItem && <CustomizerModal item={customizerItem} onConfirm={(opts) => addToCart(customizerItem, opts)} onCancel={() => setCustomizerItem(null)} />}
-      {cartOpen && <CartDrawer cart={cart} onClose={() => setCartOpen(false)} onCheckout={handleCheckout} onRemove={removeFromCart} onQty={changeQty} taxConfig={taxConfig} />}
+      {cartOpen && <CartDrawer cart={cart} onClose={() => setCartOpen(false)} onCheckout={handleCheckout} onRemove={removeFromCart} onQty={changeQty} taxConfig={taxConfig} packageData={packageData} partySize={partySize} isFirstOrder={orderHistory.length === 0} />}
 
       {/* Leave Table Confirmation Modal */}
       {leaveConfirm && (
@@ -917,11 +1117,28 @@ const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindR
             <span className="text-3xl font-black text-[#c59a63] tracking-tight">Pragati RMS</span>
           </div>
           <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 mr-2">
+              <span className={`text-xs font-bold ${vegOnly ? 'text-green-600' : 'text-gray-400'}`}>Veg Only</span>
+              <button 
+                onClick={() => setVegOnly(!vegOnly)}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${vegOnly ? 'bg-green-600' : 'bg-gray-200'}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${vegOnly ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
             <button onClick={() => setLeaveConfirm(true)}
               className="flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold text-gray-600 hover:bg-white transition-all border border-gray-200 bg-white/50">
               <span className="material-symbols-outlined text-[16px]">logout</span>
               Leave Table
             </button>
+            {hasActiveOrder && (
+              <button onClick={() => setSubScreen('success')}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold text-white bg-[#c59a63] hover:bg-[#b8895a] transition-all shadow-md">
+                <span className="material-symbols-outlined text-[16px]">receipt_long</span>
+                View Order
+              </button>
+            )}
             <button onClick={() => setCartOpen(true)}
               className="relative flex items-center gap-3 px-5 py-2.5 rounded-full bg-[#1a1a1a] text-white font-bold text-xs shadow-xl hover:bg-black transition-all">
               <div className="flex items-center gap-1.5 text-[#b8895a]">
@@ -1047,9 +1264,9 @@ const MenuScreen = ({ guestName, tableId, mobile, socket, packageData, onUnbindR
                     <div className="flex items-center gap-3">
                       {qtyInCart > 0 ? (
                         <div className="flex items-center gap-3 bg-gray-50 rounded-full px-1 border border-gray-200">
-                          <button onClick={() => changeQty(item._id || item.id, -1)} className="w-7 h-7 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors material-symbols-outlined text-[16px]">remove</button>
+                          <button onClick={() => handleQtyChange(item, -1)} className="w-7 h-7 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors material-symbols-outlined text-[16px]">remove</button>
                           <span className="text-xs font-bold w-4 text-center">{qtyInCart}</span>
-                          <button onClick={() => changeQty(item._id || item.id, 1)} className="w-7 h-7 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors material-symbols-outlined text-[16px]">add</button>
+                          <button onClick={() => handleQtyChange(item, 1)} className="w-7 h-7 rounded-full flex items-center justify-center text-gray-600 hover:bg-gray-200 transition-colors material-symbols-outlined text-[16px]">add</button>
                         </div>
                       ) : (
                         <button onClick={() => Object.keys(item.mods || {}).length > 0 ? setCustomizerItem(item) : addToCart(item)}
@@ -1090,6 +1307,7 @@ const ModuleA = () => {
   });
   const [socket, setSocket] = useState(null);
   const [showPinModal, setShowPinModal] = useState(false);
+  const [showGuestPinModal, setShowGuestPinModal] = useState(false);
 
   useEffect(() => {
     localStorage.setItem('pragati_kiosk_screen', kioskScreen);
@@ -1111,30 +1329,125 @@ const ModuleA = () => {
 
     // Host started a session -> wake the kiosk
     s.on('session_started', (data) => {
-      setSession({ guestName: data.guest_name, mobile: data.mobile || null, package: data.package || null });
+      setSession({ guestName: data.guest_name, mobile: data.mobile || null, package: data.package || null, party_size: data.party_size || 1 });
       if (!data.is_reconnect) {
         setKioskScreen('idle'); // Show welcome banner only for new sessions
         localStorage.removeItem('pragati_kiosk_cart');
         localStorage.removeItem('pragati_kiosk_subscreen');
         localStorage.removeItem('pragati_kiosk_checkout_total');
         localStorage.removeItem('pragati_kiosk_order_status');
+        localStorage.removeItem('pragati_kiosk_order_time');
+        localStorage.removeItem('pragati_kiosk_order_history');
       }
     });
 
     // Table reset / force close from host
     s.on('session_reset', () => {
-      setSession({ guestName: null, mobile: null, package: null });
+      setSession({ guestName: null, mobile: null, package: null, party_size: 1 });
       setKioskScreen('idle');
       localStorage.removeItem('pragati_kiosk_cart');
       localStorage.removeItem('pragati_kiosk_subscreen');
       localStorage.removeItem('pragati_kiosk_checkout_total');
       localStorage.removeItem('pragati_kiosk_order_status');
+      localStorage.removeItem('pragati_kiosk_order_time');
+      localStorage.removeItem('pragati_kiosk_order_history');
       setOrderStatus(null);
     });
 
     setSocket(s);
     return () => s.disconnect();
   }, [tableId]);
+
+  const GuestPinModal = ({ deviceId, onSuccess, onCancel }) => {
+  const [digits, setDigits] = useState(['', '', '', '']);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [showPin, setShowPin] = useState(false);
+  const refs = [useRef(), useRef(), useRef(), useRef()];
+
+  const handleDigit = (idx, val) => {
+    if (!/^\d?$/.test(val)) return;
+    const next = [...digits];
+    next[idx] = val;
+    setDigits(next);
+    setError('');
+    if (val && idx < 3) refs[idx + 1].current?.focus();
+  };
+
+  const handleKey = (idx, e) => {
+    if (e.key === 'Backspace' && !digits[idx] && idx > 0) refs[idx - 1].current?.focus();
+  };
+
+  const handleVerify = async () => {
+    const pin = digits.join('');
+    if (pin.length < 4) { setError('Enter all 4 digits.'); return; }
+    setLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`${API}/api/kiosk/verify-guest-pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: deviceId, pin }),
+      });
+      if (res.ok) { onSuccess(); }
+      else { setError('Incorrect PIN. Access denied.'); setDigits(['', '', '', '']); refs[0].current?.focus(); }
+    } catch { setError('Server unreachable.'); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
+      <div className="bg-white rounded-[28px] p-8 w-full max-w-xs shadow-2xl text-center">
+        <div className="w-14 h-14 rounded-2xl bg-[#c59a63]/10 flex items-center justify-center mx-auto mb-4">
+          <span className="material-symbols-outlined text-[#c59a63] text-[28px]">lock</span>
+        </div>
+        <h3 className="font-black text-lg text-gray-800 mb-1">Enter 4-Digit Code</h3>
+        <p className="text-xs text-gray-400 mb-6">Please enter the code sent to your email or provided by the host.</p>
+
+        <div className="flex justify-center gap-3 mb-2">
+          {digits.map((d, i) => (
+            <input
+              key={i}
+              ref={refs[i]}
+              type={showPin ? 'text' : 'password'}
+              maxLength={1}
+              value={d}
+              onChange={e => handleDigit(i, e.target.value)}
+              onKeyDown={e => handleKey(i, e)}
+              className={`w-12 h-14 text-center text-xl font-black rounded-2xl border-2 outline-none transition-all [&::-ms-reveal]:hidden [&::-ms-clear]:hidden [&::-webkit-contacts-auto-fill-button]:hidden ${error ? 'border-red-300 bg-red-50' : 'border-gray-100 bg-gray-50 focus:border-[#c59a63] focus:bg-white'}`}
+              autoFocus={i === 0}
+            />
+          ))}
+        </div>
+
+        <div className="flex justify-center mb-4">
+          <button 
+            onClick={() => setShowPin(!showPin)} 
+            className="text-[11px] font-bold text-gray-400 hover:text-gray-600 flex items-center gap-1 transition-colors"
+          >
+            <span className="material-symbols-outlined text-[14px]">
+              {showPin ? 'visibility_off' : 'visibility'}
+            </span>
+            {showPin ? 'Hide PIN' : 'Show PIN'}
+          </button>
+        </div>
+
+        {error && <p className="text-xs font-bold text-red-500 mb-4">{error}</p>}
+
+        <button
+          onClick={handleVerify}
+          disabled={loading}
+          className="w-full py-3.5 rounded-2xl bg-[#c59a63] text-white font-black text-sm mb-3 hover:bg-[#b8895a] transition-colors disabled:opacity-60 flex items-center justify-center gap-2"
+        >
+          {loading ? <><span className="material-symbols-outlined animate-spin text-[18px]">autorenew</span>Verifying...</> : 'Unlock Screen'}
+        </button>
+        <button onClick={onCancel} className="w-full py-3 rounded-2xl text-xs font-bold text-gray-400 hover:bg-gray-50 transition-colors">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+};
 
   // ─── PHASE 3: Unbind ────────────────────────────────────────────────────────
   const handleUnbindSuccess = () => {
@@ -1171,11 +1484,20 @@ const ModuleA = () => {
         <IdleScreen
           tableId={tableId}
           guestName={session.guestName}
-          onStart={() => {
+          onStart={() => setShowGuestPinModal(true)}
+          onUnbindRequest={() => setShowPinModal(true)}
+        />
+      )}
+
+      {showGuestPinModal && (
+        <GuestPinModal 
+          deviceId={tableId}
+          onSuccess={() => {
+            setShowGuestPinModal(false);
             if (socket) socket.emit('customer_started_session', { device_id: tableId });
             setKioskScreen('menu');
           }}
-          onUnbindRequest={() => setShowPinModal(true)}
+          onCancel={() => setShowGuestPinModal(false)}
         />
       )}
 
@@ -1186,6 +1508,7 @@ const ModuleA = () => {
           mobile={session.mobile}
           socket={socket}
           packageData={session.package}
+          partySize={session.party_size}
           onUnbindRequest={() => setShowPinModal(true)}
         />
       )}

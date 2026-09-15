@@ -24,7 +24,40 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-const { User, Device, Table, TableSession, Order, Recipe, Inventory, MenuItem, Customer, Category, Vendor, PurchaseOrder, AuditLog, Shift, TaxConfig, Package, Booking } = require('./models');
+const { User, Device, Table, TableSession, Order, Recipe, Inventory, MenuItem, Customer, Category, Vendor, PurchaseOrder, AuditLog, Shift, TaxConfig, Package, Booking, Feedback } = require('./models');
+
+const generatePin = () => Math.floor(1000 + Math.random() * 9000).toString();
+
+const sendConfirmationEmail = async (email, guestName, authCode) => {
+  if (!email) return false;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer re_HSDjYy61_2GZdgEwXzD1vamAPu5XoEXAV`
+      },
+      body: JSON.stringify({
+        from: 'Pragati RMS <onboarding@resend.dev>',
+        to: email,
+        subject: 'Your Booking Confirmation & Access Code',
+        html: `<h2>Welcome, ${guestName}!</h2><p>Your booking is confirmed.</p><p>To access the menu on your table, please use this 4-digit code: <strong>${authCode}</strong></p>`
+      })
+    });
+    
+    const data = await res.json();
+    if (res.ok) {
+      console.log(`✅ Email successfully sent to ${email} (Resend ID: ${data.id})`);
+      return true;
+    } else {
+      console.error(`❌ Resend API Error for ${email}:`, data);
+      return false;
+    }
+  } catch (error) {
+    console.error(`❌ Network error while sending email to ${email}:`, error);
+    return false;
+  }
+};
 
 const app = express();
 const server = http.createServer(app);
@@ -54,7 +87,7 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
   } catch (err) {
     console.error('Error seeding users:', err);
   }
-  
+
   try {
     const invCount = await Inventory.countDocuments();
     if (invCount === 0) {
@@ -65,13 +98,13 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
         { ingredient_name: 'Montmorency Cherries', stock_level: 2.1, unit: 'kg', par_level: 5.0, vendor_name: 'Baldor Specialty', cost_per_unit: 12.0 },
         { ingredient_name: 'Heritage Baby Carrots', stock_level: 12, unit: 'kg', par_level: 20.0, vendor_name: 'Baldor Specialty', cost_per_unit: 8.5 }
       ]);
-      
+
       const menuItems = await MenuItem.insertMany([
         { name: 'Pan-Seared Duck Breast', price: 46.00, category: 'Entree' },
         { name: 'Truffle Tagliolini', price: 34.00, category: 'Pasta' },
         { name: 'Wood-Fired Wagyu A5', price: 95.00, category: 'Entree' }
       ]);
-      
+
       await Recipe.insertMany([
         {
           menu_item_id: menuItems[0]._id,
@@ -105,14 +138,14 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
     const tableCount = await Table.countDocuments();
     if (tableCount === 0) {
       const zones = ['Main Hall', 'Main Hall', 'Main Hall', 'Main Hall', 'Main Hall',
-                     'Terrace', 'Terrace', 'Terrace', 'Bar', 'Bar',
-                     'Bar', 'Private', 'Private', 'Private', 'Private'];
-      const caps  = [2, 4, 4, 6, 2, 2, 4, 4, 2, 2, 4, 8, 10, 12, 12];
+        'Terrace', 'Terrace', 'Terrace', 'Bar', 'Bar',
+        'Bar', 'Private', 'Private', 'Private', 'Private'];
+      const caps = [2, 4, 4, 6, 2, 2, 4, 4, 2, 2, 4, 8, 10, 12, 12];
       await Table.insertMany(
         Array.from({ length: 15 }, (_, i) => ({
           table_id: `T${i + 1}`,
-          label:    `T${i + 1}`,
-          zone:     zones[i],
+          label: `T${i + 1}`,
+          zone: zones[i],
           capacity: caps[i],
           is_active: true,
         }))
@@ -167,7 +200,7 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     const token = jwt.sign({ userId: user._id, role: user.role }, JWT_SECRET, { expiresIn: '12h' });
-    
+
     // Log the login action
     await AuditLog.create({
       action: 'User Login',
@@ -200,7 +233,7 @@ app.post('/api/auth/logout', async (req, res) => {
 // 2. Checkout Webhook
 app.post('/api/checkout/webhook', async (req, res) => {
   const { order_id } = req.body;
-  
+
   // Using a MongoDB session for atomic transaction (requires replica set)
   if (order_id === 'mock_order_id') {
     io.to('kds').emit('new_kot', { order_id: 'MOCK-1234', items: [], timestamp: new Date() });
@@ -241,7 +274,7 @@ app.post('/api/checkout/webhook', async (req, res) => {
 
     // 3. Emit new_kot event to KDS
     io.to('kds').emit('new_kot', { order_id: order._id, items: order.items, timestamp: new Date() });
-    
+
     // Also notify the table that payment succeeded
     const tableSession = await TableSession.findById(order.session_id);
     if (tableSession) {
@@ -311,12 +344,12 @@ app.get('/api/admin/metrics', async (req, res) => {
 
     // ── Build current-period date range ──────────────────────────────────────
     let currentStart = new Date(now);
-    let currentEnd   = new Date(now);
-    let periodMs     = 0; // length of the period in ms, used to compute previous period
+    let currentEnd = new Date(now);
+    let periodMs = 0; // length of the period in ms, used to compute previous period
 
     if (filter === 'custom' && date) {
       currentStart = new Date(date); currentStart.setHours(0, 0, 0, 0);
-      currentEnd   = new Date(date); currentEnd.setHours(23, 59, 59, 999);
+      currentEnd = new Date(date); currentEnd.setHours(23, 59, 59, 999);
       periodMs = 24 * 60 * 60 * 1000;
     } else if (filter === 'week') {
       currentStart.setDate(now.getDate() - now.getDay()); currentStart.setHours(0, 0, 0, 0);
@@ -333,13 +366,13 @@ app.get('/api/admin/metrics', async (req, res) => {
     }
 
     // ── Build previous-period date range (same duration, one period back) ────
-    const prevEnd   = new Date(currentStart.getTime() - 1);       // 1ms before current start
+    const prevEnd = new Date(currentStart.getTime() - 1);       // 1ms before current start
     const prevStart = new Date(currentStart.getTime() - periodMs); // one period back
 
     // ── Fetch orders ─────────────────────────────────────────────────────────
     const [currentOrders, prevOrders] = await Promise.all([
       Order.find({ createdAt: { $gte: currentStart, $lte: currentEnd } }),
-      Order.find({ createdAt: { $gte: prevStart,    $lte: prevEnd    } }),
+      Order.find({ createdAt: { $gte: prevStart, $lte: prevEnd } }),
     ]);
 
     // ── Current-period revenue ────────────────────────────────────────────────
@@ -356,21 +389,21 @@ app.get('/api/admin/metrics', async (req, res) => {
       : null; // null means "no previous data"
 
     // ── Order counts ──────────────────────────────────────────────────────────
-    const totalOrdersToday     = currentOrders.length;
-    const previousOrderCount   = prevOrders.length;
-    const orderCountDelta      = totalOrdersToday - previousOrderCount;
-    const pendingOrdersToday   = currentOrders.filter(o => o.status === 'preparing').length;
+    const totalOrdersToday = currentOrders.length;
+    const previousOrderCount = prevOrders.length;
+    const orderCountDelta = totalOrdersToday - previousOrderCount;
+    const pendingOrdersToday = currentOrders.filter(o => o.status === 'preparing').length;
     const deliveredOrdersToday = currentOrders.filter(o => o.status === 'completed' || o.status === 'paid').length;
 
-    const cancellationsToday   = currentOrders.filter(o => o.status === 'cancelled').length;
-    
+    const cancellationsToday = currentOrders.filter(o => o.status === 'cancelled').length;
+
     // Average Wait Time for completed/paid orders
     const completedOrdersForWaitTime = currentOrders.filter(o => o.status === 'completed' || o.status === 'paid');
-    const avgWaitTimeSeconds = completedOrdersForWaitTime.length > 0 
+    const avgWaitTimeSeconds = completedOrdersForWaitTime.length > 0
       ? Math.round(completedOrdersForWaitTime.reduce((sum, o) => {
-          const endTime = o.completedAt ? new Date(o.completedAt) : new Date(o.updatedAt);
-          return sum + (endTime - new Date(o.createdAt)) / 1000;
-        }, 0) / completedOrdersForWaitTime.length)
+        const endTime = o.completedAt ? new Date(o.completedAt) : new Date(o.updatedAt);
+        return sum + (endTime - new Date(o.createdAt)) / 1000;
+      }, 0) / completedOrdersForWaitTime.length)
       : 0;
 
     // Payment Split
@@ -387,10 +420,9 @@ app.get('/api/admin/metrics', async (req, res) => {
 
 
     // ── Dine-In vs Takeaway split ─────────────────────────────────────────────
-    // Orders with device_id starting with 'T' (e.g. T1, T2) are dine-in table orders.
-    // Orders with device_id = 'TAKEAWAY' or 'KIOSK' or 'takeaway' are takeaway.
-    const dineInCount   = currentOrders.filter(o => /^T\d+$/i.test(o.device_id)).length;
-    const takeawayCount = currentOrders.filter(o => !/^T\d+$/i.test(o.device_id)).length;
+    // Uses the new order_type field. Fallback to device_id parsing for older orders.
+    const dineInCount = currentOrders.filter(o => o.order_type ? o.order_type === 'dine_in' : /^T\d+$/i.test(o.device_id)).length;
+    const takeawayCount = currentOrders.filter(o => o.order_type ? o.order_type === 'takeaway' : !/^T\d+$/i.test(o.device_id)).length;
 
     // ── Inventory ─────────────────────────────────────────────────────────────
     const inventory = await Inventory.find();
@@ -398,7 +430,7 @@ app.get('/api/admin/metrics', async (req, res) => {
     const parAlerts = inventory.filter(item => (item.stock_level + (item.on_order || 0)) <= item.par_level);
 
     // ── Floor Occupancy ───────────────────────────────────────────────────────
-    const totalTables   = await Table.countDocuments({ is_active: true });
+    const totalTables = await Table.countDocuments({ is_active: true });
     const activeSessions = await TableSession.countDocuments({ status: 'active' });
     const floorOccupancy = totalTables > 0 ? Math.round((activeSessions / totalTables) * 100) : 0;
 
@@ -409,7 +441,7 @@ app.get('/api/admin/metrics', async (req, res) => {
         if (!Array.isArray(order.items)) return;
         order.items.forEach(item => {
           if (!map[item.name]) map[item.name] = { qty: 0, revenue: 0, category: item.category || 'Main Course' };
-          map[item.name].qty     += (item.qty || 1);
+          map[item.name].qty += (item.qty || 1);
           map[item.name].revenue += (item.price || 0) * (item.qty || 1);
         });
       });
@@ -417,7 +449,7 @@ app.get('/api/admin/metrics', async (req, res) => {
     };
 
     const currentItemMap = buildItemMap(currentOrders);
-    const prevItemMap    = buildItemMap(prevOrders);
+    const prevItemMap = buildItemMap(prevOrders);
 
     const topSellers = Object.entries(currentItemMap)
       .map(([name, { qty, revenue, category }]) => {
@@ -473,7 +505,7 @@ app.get('/api/admin/orders/count', async (req, res) => {
     } else {
       const now = new Date();
       let start = new Date(now);
-      
+
       if (filter === 'day') {
         start.setHours(0, 0, 0, 0);
       } else if (filter === 'week') {
@@ -490,7 +522,7 @@ app.get('/api/admin/orders/count', async (req, res) => {
         // default to day if unrecognized filter but not custom
         start.setHours(0, 0, 0, 0);
       }
-      
+
       if (filter) { // If no filter provided at all, maybe return all, but we default to day logic above
         query.createdAt = { $gte: start, $lte: now };
       }
@@ -517,7 +549,7 @@ app.get('/api/admin/inventory', async (req, res) => {
 app.post('/api/admin/inventory/items', async (req, res) => {
   try {
     const { ingredient_name, stock_level, unit, par_level, vendor_name, cost_per_unit } = req.body;
-    
+
     if (!ingredient_name || !unit) {
       return res.status(400).json({ error: 'ingredient_name and unit are required.' });
     }
@@ -559,7 +591,7 @@ app.post('/api/admin/po/dispatch', async (req, res) => {
     const inventory = await Inventory.find();
     // Only order if stock + pending orders is still below par
     const lowItems = inventory.filter(item => (item.stock_level + item.on_order) <= item.par_level);
-    
+
     if (lowItems.length === 0) {
       return res.json({ success: true, message: 'No items require restocking.' });
     }
@@ -681,10 +713,10 @@ app.post('/api/sales/session/close', async (req, res) => {
     if (!session) return res.status(404).json({ error: 'No active session for this table.' });
     session.status = 'completed';
     await session.save();
-    
+
     // Sync booking status
     await Booking.updateMany({ table_id: device_id, status: { $in: ['active', 'ready'] } }, { status: 'completed' });
-    
+
     // Notify the kiosk so it resets to the idle/screensaver screen
     io.to(`room_table_${device_id}`).emit('session_reset');
     // Notify host stand to refresh
@@ -720,10 +752,10 @@ app.post('/api/admin/menu-items', async (req, res) => {
   try {
     const { name, price, category, is_veg, tags, image_url } = req.body;
     if (!name || !price) return res.status(400).json({ error: 'Name and price are required.' });
-    const item = new MenuItem({ 
-      name, 
-      price: parseFloat(price), 
-      category: category || 'General', 
+    const item = new MenuItem({
+      name,
+      price: parseFloat(price),
+      category: category || 'General',
       is_veg: !!is_veg,
       tags: tags || [],
       image_url
@@ -740,15 +772,15 @@ app.put('/api/admin/menu-items/:id', async (req, res) => {
   try {
     const { name, price, category, is_veg, tags, image_url } = req.body;
     const item = await MenuItem.findByIdAndUpdate(
-      req.params.id, 
-      { 
-        name, 
-        price: parseFloat(price), 
-        category, 
+      req.params.id,
+      {
+        name,
+        price: parseFloat(price),
+        category,
         is_veg: !!is_veg,
         tags: tags || [],
         image_url
-      }, 
+      },
       { new: true }
     );
     if (!item) return res.status(404).json({ error: 'Item not found.' });
@@ -883,7 +915,7 @@ app.post('/api/admin/inventory/receive', async (req, res) => {
   try {
     const { inventory_id, quantity_received } = req.body;
     if (!inventory_id || !quantity_received) return res.status(400).json({ error: 'inventory_id and quantity_received required.' });
-    
+
     const qty = Math.abs(parseFloat(quantity_received));
     const item = await Inventory.findById(inventory_id);
     if (!item) return res.status(404).json({ error: 'Inventory item not found.' });
@@ -943,7 +975,7 @@ app.get('/api/admin/finance/report', async (req, res) => {
     let query = { status: { $in: ['paid', 'completed'] } };
     const now = new Date();
     let start = new Date(now);
-    
+
     if (filter === 'custom' && date) {
       start = new Date(date);
       start.setHours(0, 0, 0, 0);
@@ -965,12 +997,12 @@ app.get('/api/admin/finance/report', async (req, res) => {
       }
       query.createdAt = { $gte: start, $lte: now };
     }
-    
+
     const paidOrders = await Order.find(query).sort({ createdAt: -1 });
     const grossRevenue = paidOrders.reduce((sum, o) => sum + o.total_amount, 0);
     const cogsEstimate = grossRevenue * 0.284;
     const netRevenue = grossRevenue - cogsEstimate;
-    
+
     const taxes = await TaxConfig.find({ is_active: true });
     let totalTaxAmount = 0;
     const taxBreakdown = {};
@@ -979,13 +1011,13 @@ app.get('/api/admin/finance/report', async (req, res) => {
       totalTaxAmount += amt;
       taxBreakdown[tax.name] = amt;
     });
-    
+
     // Fallback if no taxes configured
     if (taxes.length === 0) {
       totalTaxAmount = grossRevenue * 0.18;
       taxBreakdown['GST (Fallback 18%)'] = totalTaxAmount;
     }
-    
+
     const netAfterTax = grossRevenue - totalTaxAmount;
 
     // Hourly breakdown
@@ -1016,9 +1048,9 @@ app.get('/api/admin/finance/report', async (req, res) => {
         }
       }
     });
-    
+
     const hourlyBreakdown = Object.entries(hourlyMap).map(([hour, revenue]) => ({ hour, revenue }));
-    
+
     res.json({
       grossRevenue,
       cogsEstimate,
@@ -1089,16 +1121,16 @@ app.post('/api/admin/staff', async (req, res) => {
   try {
     const { username, role, password } = req.body;
     if (!username || !role || !password) return res.status(400).json({ error: 'Username, role, and password required.' });
-    
+
     // check if user exists
     const existing = await User.findOne({ username });
     if (existing) return res.status(400).json({ error: 'Username already exists' });
 
     // use bcrypt ideally, but here we'll just store whatever is passed or a simple hash if required by User model
     // Note: ensure your actual auth uses the correct hashing
-    const user = new User({ username, role, password_hash: password }); 
+    const user = new User({ username, role, password_hash: password });
     await user.save();
-    
+
     // Log audit
     await new AuditLog({ action: 'CREATE_STAFF', user: 'System Admin', details: `Created staff user ${username} with role ${role}` }).save();
 
@@ -1177,6 +1209,7 @@ app.get('/api/tables', async (req, res) => {
       ...t.toObject(),
       sessionStatus: activeMap[t.table_id] ? (activeMap[t.table_id].status === 'active' ? 'occupied' : 'reserved') : 'available',
       guest_name: activeMap[t.table_id]?.guest_name || null,
+      auth_code: activeMap[t.table_id]?.auth_code || null,
     }));
     res.json(result);
   } catch (err) {
@@ -1194,6 +1227,20 @@ app.post('/api/tables', async (req, res) => {
     const table = new Table({ table_id, label, zone: zone || 'Main Hall', capacity: parseInt(capacity) || 4 });
     await table.save();
     res.status(201).json(table);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/tables/:table_id — update a table capacity
+app.put('/api/tables/:table_id', async (req, res) => {
+  try {
+    const { capacity } = req.body;
+    const table = await Table.findOne({ table_id: req.params.table_id });
+    if (!table) return res.status(404).json({ error: 'Table not found.' });
+    if (capacity) table.capacity = parseInt(capacity);
+    await table.save();
+    res.json({ success: true, table });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1266,31 +1313,55 @@ app.post('/api/kiosk/verify-pin', (req, res) => {
 
 app.post('/api/kiosk/order', async (req, res) => {
   try {
-    const { table_id, items, total, station, course } = req.body;
+    const { table_id, items, total, taxes, station, course, payment_method } = req.body;
     const session = await TableSession.findOne({ device_id: table_id, status: 'active' });
-    
+
     const order = new Order({
       session_id: session ? session._id : null,
       device_id: table_id,
       total_amount: total,
+      taxes: taxes || [],
+      payment_method: payment_method || 'cash',
       items: items,
       station: station || 'Grill',
       course: course || 'main',
-      status: 'preparing'
+      status: 'preparing',
+      order_type: session ? session.order_type : 'dine_in'
     });
-    
+
     await order.save();
-    
+
+    // Deduct inventory based on recipes
+    for (const item of items) {
+      if (item.menu_item_id) {
+        try {
+          const recipe = await Recipe.findOne({ menu_item_id: item.menu_item_id });
+          if (recipe) {
+            for (const ingredient of recipe.ingredients) {
+              const deduction = ingredient.quantity_required * (item.qty || 1);
+              await Inventory.findByIdAndUpdate(
+                ingredient.inventory_id,
+                { $inc: { stock_level: -deduction } }
+              );
+            }
+          }
+        } catch (err) {
+          console.error(`Failed to deduct inventory for item ${item.menu_item_id}:`, err);
+        }
+      }
+    }
+
     // Broadcast to kitchen
     io.to('kds').emit('new_kot', {
       id: order._id,
-      table_id: order.device_id,
-      items: order.items,
-      station: order.station,
-      course: order.course,
-      time: order.createdAt
+      table_id: table_id,
+      items: items,
+      station: station || 'Grill',
+      course: course || 'main',
+      time: order.createdAt,
+      order_type: order.order_type
     });
-    
+
     res.status(201).json({ success: true, order_id: order._id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1306,7 +1377,8 @@ app.get('/api/kitchen/active-orders', async (req, res) => {
       items: o.items,
       station: o.station,
       course: o.course,
-      time: o.createdAt
+      time: o.createdAt,
+      order_type: o.order_type
     })));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1317,12 +1389,12 @@ app.post('/api/kitchen/bump', async (req, res) => {
   try {
     const { order_id } = req.body;
     const order = await Order.findByIdAndUpdate(order_id, { status: 'completed' }, { new: true });
-    
+
     // Notify the specific table that their food is ready
     if (order && order.device_id) {
       io.to(`room_table_${order.device_id}`).emit('order_ready', { order_id: order._id });
     }
-    
+
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1333,7 +1405,7 @@ app.get('/api/kitchen/history', async (req, res) => {
   try {
     const { date } = req.query;
     let filter = { status: { $in: ['completed', 'paid'] } };
-    
+
     if (date) {
       const startOfDay = new Date(date);
       startOfDay.setUTCHours(0, 0, 0, 0);
@@ -1351,7 +1423,8 @@ app.get('/api/kitchen/history', async (req, res) => {
       course: o.course,
       time: o.createdAt,
       completedAt: o.updatedAt,
-      status: o.status
+      status: o.status,
+      order_type: o.order_type
     })));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1417,12 +1490,12 @@ app.get('/api/bookings', async (req, res) => {
 
 app.post('/api/bookings', async (req, res) => {
   try {
-    const { table_id, booking_time } = req.body;
+    const { table_id, booking_time, email, guest_name } = req.body;
     // Conflict check logic (basic: no bookings for the same table within 2 hours)
     const newTime = new Date(booking_time);
     const twoHoursBefore = new Date(newTime.getTime() - 2 * 60 * 60 * 1000);
     const twoHoursAfter = new Date(newTime.getTime() + 2 * 60 * 60 * 1000);
-    
+
     const conflict = await Booking.findOne({
       table_id,
       status: { $in: ['pending', 'active'] },
@@ -1433,9 +1506,10 @@ app.post('/api/bookings', async (req, res) => {
       return res.status(409).json({ error: `Table ${table_id} is already booked around that time.` });
     }
 
-    const booking = new Booking(req.body);
+    const auth_code = generatePin();
+    const booking = new Booking({ ...req.body, auth_code });
     await booking.save();
-    
+
     // Instantly track customer in CRM
     if (booking.mobile && booking.guest_name) {
       let customer = await Customer.findOne({ mobile: booking.mobile });
@@ -1448,12 +1522,16 @@ app.post('/api/bookings', async (req, res) => {
         await customer.save();
       }
     }
-    
+
+    if (email) {
+      await sendConfirmationEmail(email, guest_name, auth_code);
+    }
+
     // If the booking is for now or within the next minute, activate it immediately
     if (new Date(booking.booking_time).getTime() <= Date.now() + 60000) {
       setTimeout(() => activateBooking(booking).catch(console.error), 0);
     }
-    
+
     res.status(201).json(booking);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -1479,13 +1557,21 @@ app.delete('/api/bookings/:id', async (req, res) => {
 });
 
 async function activateBooking(b) {
-  // Create standby TableSession
   let session = await TableSession.findOne({ device_id: b.table_id, status: { $in: ['active', 'standby'] } });
   if (!session) {
-    session = new TableSession({ device_id: b.table_id, guest_name: b.guest_name, mobile: b.mobile, status: 'standby' });
+    session = new TableSession({ 
+      device_id: b.table_id, 
+      guest_name: b.guest_name, 
+      mobile: b.mobile, 
+      email: b.email, 
+      auth_code: b.auth_code, 
+      package: b.package_id,
+      party_size: b.party_size || 1,
+      status: 'standby' 
+    });
     await session.save();
   }
-  
+
   // Track customer if mobile provided
   if (b.mobile && b.guest_name) {
     let customer = await Customer.findOne({ mobile: b.mobile });
@@ -1499,7 +1585,7 @@ async function activateBooking(b) {
       await customer.save();
     }
   }
-  
+
   b.status = 'ready';
   await b.save();
 
@@ -1510,14 +1596,16 @@ async function activateBooking(b) {
     const pkgId = b.package_id._id || b.package_id;
     packageData = await Package.findById(pkgId).populate('menu_items');
   }
-  
-  io.to(`room_table_${b.table_id}`).emit('session_started', { 
-    session_id: session._id, 
+
+  io.to(`room_table_${b.table_id}`).emit('session_started', {
+    session_id: session._id,
     guest_name: b.guest_name,
     mobile: b.mobile,
-    package: packageData
+    email: b.email,
+    package: packageData,
+    party_size: session.party_size
   });
-  
+
   // Refresh Host Stand
   io.emit('refresh_tables');
   console.log(`Auto-started booking session for table ${b.table_id}`);
@@ -1528,7 +1616,7 @@ setInterval(async () => {
   try {
     const now = new Date();
     const pendingBookings = await Booking.find({ status: 'pending', booking_time: { $lte: now } }).populate('package_id');
-    
+
     for (const b of pendingBookings) {
       await activateBooking(b);
     }
@@ -1550,17 +1638,21 @@ io.on('connection', (socket) => {
     } else if (device_id) {
       socket.join(`room_table_${device_id}`);
       console.log(`Socket ${socket.id} joined room_table_${device_id}`);
-      
+
       if (role === 'Customer') {
         try {
-          const session = await TableSession.findOne({ device_id, status: { $in: ['active', 'standby'] } });
+          const session = await TableSession.findOne({ device_id, status: { $in: ['active', 'standby'] } }).populate('package');
           if (session) {
-            const booking = await Booking.findOne({ table_id: device_id, status: { $in: ['active', 'ready'] } }).populate('package_id');
+            let pkgData = null;
+            if (session.package) {
+               pkgData = await Package.findById(session.package._id).populate('menu_items');
+            }
             socket.emit('session_started', {
               session_id: session._id,
               guest_name: session.guest_name,
               mobile: session.mobile,
-              package: booking ? booking.package_id : null,
+              package: pkgData,
+              party_size: session.party_size,
               is_reconnect: true
             });
           }
@@ -1572,14 +1664,25 @@ io.on('connection', (socket) => {
   });
 
   // Host starts a session for a table
-  socket.on('start_session', async ({ device_id, guest_name, mobile, package_id }) => {
+  socket.on('start_session', async ({ device_id, guest_name, email, mobile, package_id, party_size, is_takeaway }) => {
     try {
+      const auth_code = generatePin();
+      const order_type = is_takeaway ? 'takeaway' : 'dine_in';
       let session = await TableSession.findOne({ device_id, status: 'active' });
       if (!session) {
-        session = new TableSession({ device_id, guest_name, mobile, status: 'active' });
+        session = new TableSession({ device_id, guest_name, email, mobile, auth_code, status: 'active', package: package_id, party_size: party_size || 1, order_type });
+        await session.save();
+      } else {
+        session.guest_name = guest_name;
+        session.email = email;
+        session.mobile = mobile;
+        session.auth_code = auth_code;
+        session.package = package_id;
+        session.party_size = party_size || 1;
+        session.order_type = order_type;
         await session.save();
       }
-      
+
       // Track customer if mobile provided
       if (mobile && guest_name) {
         let customer = await Customer.findOne({ mobile });
@@ -1593,18 +1696,24 @@ io.on('connection', (socket) => {
           await customer.save();
         }
       }
-      
+
       let packageData = null;
       if (package_id) {
         packageData = await Package.findById(package_id).populate('menu_items');
       }
 
+      if (email) {
+        await sendConfirmationEmail(email, guest_name, auth_code);
+      }
+
       // Wake up the customer kiosk
-      io.to(`room_table_${device_id}`).emit('session_started', { 
-        session_id: session._id, 
-        guest_name, 
+      io.to(`room_table_${device_id}`).emit('session_started', {
+        session_id: session._id,
+        guest_name,
         mobile,
-        package: packageData
+        email,
+        package: packageData,
+        party_size: session.party_size
       });
       console.log(`Session started for device ${device_id}`);
       io.emit('refresh_tables');
@@ -1649,6 +1758,124 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
+// --- KIOSK API ROUTES ---
+app.post('/api/kiosk/verify-guest-pin', async (req, res) => {
+  try {
+    const { device_id, pin } = req.body;
+    const session = await TableSession.findOne({ device_id, status: { $in: ['standby', 'active'] } });
+    if (!session) return res.status(404).json({ error: 'No active session found.' });
+    if (session.auth_code !== pin) return res.status(401).json({ error: 'Invalid PIN.' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/kiosk/send-receipt', async (req, res) => {
+  try {
+    const { device_id, items, total, taxBreakdown } = req.body;
+    const session = await TableSession.findOne({ device_id, status: { $in: ['active', 'standby', 'completed'] } }).populate('package').sort({ createdAt: -1 });
+    if (!session || !session.email) {
+      return res.status(400).json({ error: 'No email associated with this session.' });
+    }
+
+    const packageFee = session.package ? (session.package.pricing_type === 'per_person' ? (session.package.price || 0) * (session.party_size || 1) : (session.package.price || 0)) : 0;
+    
+    let itemsHtml = '';
+    if (session.package && packageFee > 0) {
+      const qtyStr = session.package.pricing_type === 'per_person' ? `${session.party_size || 1}x` : '1x';
+      itemsHtml += `
+      <tr>
+        <td style="padding: 8px 0; border-bottom: 1px dashed #ccc; color: #555;">${qtyStr} <strong>${session.package.name} Package</strong></td>
+        <td style="padding: 8px 0; border-bottom: 1px dashed #ccc; text-align: right; font-weight: bold; color: #333;">&#8377;${packageFee.toFixed(2)}</td>
+      </tr>`;
+    }
+    
+    itemsHtml += items.map(i => `
+      <tr>
+        <td style="padding: 8px 0; border-bottom: 1px dashed #ccc; color: #555;">${i.qty}x <strong>${i.name}</strong></td>
+        <td style="padding: 8px 0; border-bottom: 1px dashed #ccc; text-align: right; font-weight: bold; color: #333;">&#8377;${(i.price * i.qty).toFixed(2)}</td>
+      </tr>
+    `).join('');
+
+    const taxHtml = (taxBreakdown || []).map(t => `
+      <tr>
+        <td style="padding: 4px 0; color: #777; font-size: 12px;">${t.label}</td>
+        <td style="padding: 4px 0; text-align: right; color: #777; font-size: 12px;">&#8377;${t.amount.toFixed(2)}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto; background: #faf9f6; padding: 30px; border-radius: 12px; border: 1px solid #eaeaea;">
+        <h2 style="text-align: center; color: #333; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 2px;">Pragati RMS</h2>
+        <p style="text-align: center; color: #777; font-size: 10px; letter-spacing: 2px; margin-top: 0;">RECEIPT</p>
+        <p style="text-align: center; color: #555; margin-top: 20px;">Thank you for dining with us, <strong>${session.guest_name || 'Guest'}</strong>!</p>
+        
+        <table style="width: 100%; margin-top: 30px; border-collapse: collapse;">
+          ${itemsHtml}
+        </table>
+        
+        <table style="width: 100%; margin-top: 15px; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 4px 0; font-weight: bold; color: #555;">Subtotal</td>
+            <td style="padding: 4px 0; text-align: right; font-weight: bold; color: #555;">&#8377;${(total - (taxBreakdown || []).reduce((s, t) => s + t.amount, 0)).toFixed(2)}</td>
+          </tr>
+          ${taxHtml}
+        </table>
+
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #333; display: flex; justify-content: space-between;">
+          <strong style="font-size: 18px; color: #111;">TOTAL</strong>
+          <strong style="font-size: 18px; color: #111; float: right;">&#8377;${total.toFixed(2)}</strong>
+        </div>
+
+        <p style="text-align: center; color: #888; font-size: 12px; margin-top: 40px;">We hope to see you again soon!</p>
+      </div>
+    `;
+
+    const resendRes = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer re_HSDjYy61_2GZdgEwXzD1vamAPu5XoEXAV`
+      },
+      body: JSON.stringify({
+        from: 'Pragati RMS <onboarding@resend.dev>',
+        to: session.email,
+        subject: `Your Receipt from Pragati RMS (Table ${device_id})`,
+        html
+      })
+    });
+
+    if (resendRes.ok) {
+      res.json({ success: true });
+    } else {
+      res.status(500).json({ error: 'Failed to send email.' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// POST /api/kiosk/feedback
+app.post('/api/kiosk/feedback', async (req, res) => {
+  try {
+    const fb = new Feedback(req.body);
+    await fb.save();
+    res.status(201).json(fb);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/feedback
+app.get('/api/admin/feedback', async (req, res) => {
+  try {
+    const fbs = await Feedback.find().sort({ createdAt: -1 });
+    res.json(fbs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 server.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
 });

@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const bookingSchema = new mongoose.Schema({
   table_id: { type: String, required: true },
   guest_name: { type: String, required: true },
+  email: { type: String },
+  auth_code: { type: String },
   mobile: { type: String },
   party_size: { type: Number, default: 1 },
   booking_time: { type: Date, required: true },

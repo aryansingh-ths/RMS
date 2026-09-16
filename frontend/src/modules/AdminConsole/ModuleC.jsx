@@ -1760,6 +1760,30 @@ const SystemAdminPanel = () => {
     if (r.ok) { showToast('Staff deleted'); fetchData(); } else showToast('Error', 'error');
   };
 
+  const [resetModal, setResetModal] = React.useState(null); // { id, username }
+  const [resetPw, setResetPw] = React.useState('');
+  const [resetLoading, setResetLoading] = React.useState(false);
+
+  const openResetModal = (u) => { setResetModal({ id: u._id, username: u.username }); setResetPw(''); };
+  const closeResetModal = () => { setResetModal(null); setResetPw(''); };
+
+  const submitReset = async () => {
+    if (!resetPw || resetPw.length < 4) return showToast('Password must be at least 4 characters', 'error');
+    setResetLoading(true);
+    try {
+      const r = await fetch(`${API}/api/admin/staff/${resetModal.id}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPassword: resetPw })
+      });
+      const data = await r.json();
+      if (r.ok) { showToast(`Password for ${resetModal.username} updated`); closeResetModal(); }
+      else showToast(data.error || 'Error resetting password', 'error');
+    } catch { showToast('Connection error', 'error'); }
+    setResetLoading(false);
+  };
+
+
   const submitHardware = async () => {
     if (!hardwareForm.name || !hardwareForm.mac) return showToast('Fields required', 'error');
     const r = await fetch(`${API}/api/admin/hardware`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(hardwareForm) });
@@ -1772,9 +1796,65 @@ const SystemAdminPanel = () => {
     if (r.ok) { showToast('Hardware removed'); fetchData(); } else showToast('Error', 'error');
   };
 
+  const DEVICE_TYPE_PRESETS = ['Customer Kiosk', 'KDS Screen', 'Host Tablet', 'POS Terminal', 'Custom...'];
+  const [customType, setCustomType] = React.useState('');
+
+  const toggleStatus = async (d) => {
+    const cycle = { 'Online': 'Offline', 'Offline': 'Online', 'Standby': 'Online' };
+    const next = cycle[d.status] || 'Offline';
+    const r = await fetch(`${API}/api/admin/hardware/${d._id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: next })
+    });
+    if (r.ok) { showToast(`${d.name} → ${next}`); fetchData(); }
+    else showToast('Status update failed', 'error');
+  };
+
+
   return (
     <div className="w-full flex flex-col gap-6">
       {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      {/* Reset Password Modal */}
+      {resetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm p-8 flex flex-col gap-5 relative">
+            <button onClick={closeResetModal} className="absolute top-4 right-4 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-400 hover:bg-gray-200 transition-all">
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-50 flex items-center justify-center text-amber-500">
+                <span className="material-symbols-outlined text-[24px]">lock_reset</span>
+              </div>
+              <div>
+                <h3 className="text-base font-black text-gray-800">Reset Password</h3>
+                <p className="text-xs text-gray-400 mt-0.5">Set a new password for <span className="font-bold text-gray-600">{resetModal.username}</span></p>
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2 block">New Password</label>
+              <input
+                type="password"
+                value={resetPw}
+                onChange={e => setResetPw(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && submitReset()}
+                placeholder="Min 4 characters"
+                className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl text-sm font-semibold text-gray-800 focus:outline-none focus:border-amber-400 transition-colors"
+                autoFocus
+              />
+            </div>
+            <button
+              onClick={submitReset}
+              disabled={resetLoading}
+              className="w-full py-3 rounded-xl bg-gray-900 text-white text-sm font-bold hover:bg-gray-800 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              {resetLoading ? <><span className="material-symbols-outlined animate-spin text-[18px]">autorenew</span>Saving...</> : <><span className="material-symbols-outlined text-[18px]">check</span>Set Password</>}
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <SectionHeader icon="admin_panel_settings" title="System Administration" subtitle="User roles, POS integration, and settings" />
       </div>
@@ -1821,6 +1901,9 @@ const SystemAdminPanel = () => {
                     <span className="material-symbols-outlined">person</span>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button onClick={() => openResetModal(u)} className="opacity-0 group-hover:opacity-100 w-8 h-8 rounded-full bg-amber-50 text-amber-500 flex items-center justify-center hover:bg-amber-100 transition-all" title="Reset Password">
+                      <span className="material-symbols-outlined text-[16px]">lock_reset</span>
+                    </button>
                     <button onClick={() => deleteStaff(u._id)} className="opacity-0 group-hover:opacity-100 w-8 h-8 rounded-full bg-red-50 text-red-500 flex items-center justify-center hover:bg-red-100 transition-all">
                       <span className="material-symbols-outlined text-[16px]">delete</span>
                     </button>
@@ -1840,17 +1923,51 @@ const SystemAdminPanel = () => {
       {tab === 'hardware' && (
         <>
           {showAddHardware && (
-            <Card className="mb-6 border-2 border-gray-900">
-              <h3 className="text-xs font-bold text-gray-900 uppercase tracking-widest mb-4">Provision Hardware</h3>
-              <div className="flex gap-4 items-center">
-                <input type="text" placeholder="Device Name" value={hardwareForm.name} onChange={e => setHardwareForm(p => ({ ...p, name: e.target.value }))} className="px-4 py-2 border border-gray-200 rounded flex-1" />
-                <select value={hardwareForm.type} onChange={e => setHardwareForm(p => ({ ...p, type: e.target.value }))} className="px-4 py-2 border border-gray-200 rounded flex-1">
-                  <option value="Customer Kiosk">Customer Kiosk</option>
-                  <option value="KDS Screen">KDS Screen</option>
-                  <option value="Host Tablet">Host Tablet</option>
-                </select>
-                <input type="text" placeholder="MAC Address (AA:BB:...)" value={hardwareForm.mac} onChange={e => setHardwareForm(p => ({ ...p, mac: e.target.value }))} className="px-4 py-2 border border-gray-200 rounded flex-1 font-mono text-sm" />
-                <button onClick={submitHardware} className="bg-gray-900 text-white px-6 py-2 rounded font-bold hover:bg-gray-800 transition-colors">Save</button>
+            <Card className="mb-6">
+              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-4">Provision Hardware</h3>
+              <div className="flex gap-4 items-start flex-wrap">
+                <input
+                  type="text"
+                  placeholder="Device Name"
+                  value={hardwareForm.name}
+                  onChange={e => setHardwareForm(p => ({ ...p, name: e.target.value }))}
+                  className="px-4 py-2 border border-gray-200 rounded-xl flex-1 min-w-[140px] text-sm focus:outline-none focus:border-gray-400"
+                />
+                <div className="flex flex-col gap-2 flex-1 min-w-[160px]">
+                  <select
+                    value={DEVICE_TYPE_PRESETS.includes(hardwareForm.type) || hardwareForm.type === '' ? hardwareForm.type : 'Custom...'}
+                    onChange={e => {
+                      if (e.target.value === 'Custom...') { setHardwareForm(p => ({ ...p, type: '' })); setCustomType(''); }
+                      else { setHardwareForm(p => ({ ...p, type: e.target.value })); setCustomType(''); }
+                    }}
+                    className="px-4 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-gray-400"
+                  >
+                    <option value="">-- Select Type --</option>
+                    {DEVICE_TYPE_PRESETS.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  {(hardwareForm.type === '' || !DEVICE_TYPE_PRESETS.slice(0, -1).includes(hardwareForm.type)) && (
+                    <input
+                      type="text"
+                      placeholder="Enter custom type..."
+                      value={customType}
+                      onChange={e => { setCustomType(e.target.value); setHardwareForm(p => ({ ...p, type: e.target.value })); }}
+                      className="px-4 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-gray-400"
+                    />
+                  )}
+                </div>
+                <input
+                  type="text"
+                  placeholder="MAC Address (AA:BB:...)"
+                  value={hardwareForm.mac}
+                  onChange={e => setHardwareForm(p => ({ ...p, mac: e.target.value }))}
+                  className="px-4 py-2 border border-gray-200 rounded-xl flex-1 min-w-[160px] font-mono text-sm focus:outline-none focus:border-gray-400"
+                />
+                <button
+                  onClick={submitHardware}
+                  className="bg-gray-900 text-white px-6 py-2 rounded-xl font-bold hover:bg-gray-800 transition-colors text-sm"
+                >
+                  Save
+                </button>
               </div>
             </Card>
           )}
@@ -1860,13 +1977,26 @@ const SystemAdminPanel = () => {
               <Card key={d._id} className="flex flex-col gap-3 relative overflow-hidden group border-t-4 border-t-teal-500">
                 <div className="flex items-center justify-between">
                   <div className="w-10 h-10 rounded-xl bg-teal-50 flex items-center justify-center text-teal-500">
-                    <span className="material-symbols-outlined">{d.type.includes('Kiosk') ? 'tablet_mac' : 'desktop_windows'}</span>
+                    <span className="material-symbols-outlined">{d.type.includes('Kiosk') ? 'tablet_mac' : d.type.includes('KDS') ? 'desktop_windows' : d.type.includes('Host') ? 'tablet' : 'devices'}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <button onClick={() => deleteHardware(d._id)} className="opacity-0 group-hover:opacity-100 w-8 h-8 rounded-full bg-red-50 text-red-500 flex items-center justify-center hover:bg-red-100 transition-all">
                       <span className="material-symbols-outlined text-[16px]">delete</span>
                     </button>
-                    <Pill label={d.status} color={d.status === 'Online' ? 'green' : 'red'} />
+                    {/* Clickable status badge — toggles Online ↔ Offline */}
+                    <button
+                      onClick={() => toggleStatus(d)}
+                      title="Click to toggle status"
+                      className={`text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-full border transition-all hover:scale-105 ${
+                        d.status === 'Online'
+                          ? 'bg-green-50 text-green-700 border-green-100 hover:bg-green-100'
+                          : d.status === 'Standby'
+                          ? 'bg-orange-50 text-orange-700 border-orange-100 hover:bg-orange-100'
+                          : 'bg-red-50 text-red-700 border-red-100 hover:bg-red-100'
+                      }`}
+                    >
+                      {d.status}
+                    </button>
                   </div>
                 </div>
                 <div className="mt-2">

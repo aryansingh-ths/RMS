@@ -214,6 +214,30 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Reset password for a staff user (Admin action)
+app.post('/api/admin/staff/:id/reset-password', async (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.trim().length < 4) {
+    return res.status(400).json({ error: 'Password must be at least 4 characters.' });
+  }
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { password_hash: newPassword.trim() },
+      { new: true }
+    );
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    await AuditLog.create({
+      action: 'Password Reset',
+      user: 'Admin',
+      details: `Admin reset the password for user ${user.username} (${user.role}).`
+    });
+    res.json({ success: true, message: `Password for ${user.username} has been reset.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/auth/logout', async (req, res) => {
   const { username } = req.body;
   try {
@@ -259,7 +283,7 @@ app.post('/api/checkout/webhook', async (req, res) => {
       const recipe = await Recipe.findOne({ menu_item_id: item.menu_item_id }).session(session);
       if (recipe) {
         for (const ingredient of recipe.ingredients) {
-          const deduction = ingredient.quantity_required * item.quantity;
+          const deduction = ingredient.quantity_required * (item.qty || 1);
           await Inventory.findByIdAndUpdate(
             ingredient.inventory_id,
             { $inc: { stock_level: -deduction } },
@@ -1186,6 +1210,27 @@ app.delete('/api/admin/hardware/:id', async (req, res) => {
   }
 });
 
+// Toggle device status (Online / Offline / Standby)
+app.patch('/api/admin/hardware/:id/status', async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['Online', 'Offline', 'Standby'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status. Must be Online, Offline, or Standby.' });
+    }
+    const device = await Device.findByIdAndUpdate(req.params.id, { status }, { new: true });
+    if (!device) return res.status(404).json({ error: 'Device not found.' });
+    await new AuditLog({
+      action: 'DEVICE_STATUS_CHANGE',
+      user: 'System Admin',
+      details: `Device "${device.name}" status changed to ${status}`
+    }).save();
+    res.json(device);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // Audit Logs API
 app.get('/api/admin/auditlogs', async (req, res) => {
   try {
@@ -1330,26 +1375,6 @@ app.post('/api/kiosk/order', async (req, res) => {
     });
 
     await order.save();
-
-    // Deduct inventory based on recipes
-    for (const item of items) {
-      if (item.menu_item_id) {
-        try {
-          const recipe = await Recipe.findOne({ menu_item_id: item.menu_item_id });
-          if (recipe) {
-            for (const ingredient of recipe.ingredients) {
-              const deduction = ingredient.quantity_required * (item.qty || 1);
-              await Inventory.findByIdAndUpdate(
-                ingredient.inventory_id,
-                { $inc: { stock_level: -deduction } }
-              );
-            }
-          }
-        } catch (err) {
-          console.error(`Failed to deduct inventory for item ${item.menu_item_id}:`, err);
-        }
-      }
-    }
 
     // Broadcast to kitchen
     io.to('kds').emit('new_kot', {

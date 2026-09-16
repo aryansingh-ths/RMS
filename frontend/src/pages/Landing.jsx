@@ -7,7 +7,9 @@ const Landing = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [showForgotModal, setShowForgotModal] = useState(false);
   const navigate = useNavigate();
+
 
   useEffect(() => {
     setMounted(true);
@@ -106,7 +108,11 @@ const Landing = () => {
                 <label className="text-xs font-bold text-[#8D6E63] uppercase tracking-widest block group-focus-within:text-[#5D4037] transition-colors">
                   Password
                 </label>
-                <button type="button" className="text-[10px] font-bold text-[#A1887F] hover:text-[#5D4037] hover:underline transition-all">
+                <button
+                  type="button"
+                  onClick={() => setShowForgotModal(true)}
+                  className="text-[10px] font-bold text-[#A1887F] hover:text-[#5D4037] hover:underline transition-all"
+                >
                   Forgot Password?
                 </button>
               </div>
@@ -171,6 +177,58 @@ const Landing = () => {
           <p className="text-lg text-slate-200 font-medium max-w-md">Experience seamless management from kitchen to table with Pragati RMS.</p>
         </div>
       </div>
+
+      {/* Forgot Password Info Modal */}
+      {showForgotModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div
+            className="bg-[#F5EFE6] rounded-3xl shadow-2xl w-full max-w-sm p-8 flex flex-col gap-5 relative"
+            style={{ border: '1.5px solid #D7C4B0' }}
+          >
+            <button
+              onClick={() => setShowForgotModal(false)}
+              className="absolute top-4 right-4 w-8 h-8 rounded-full bg-[#D7C4B0]/40 flex items-center justify-center text-[#8D6E63] hover:bg-[#D7C4B0] transition-all"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-[#c59a63]/15 flex items-center justify-center">
+                <span className="material-symbols-outlined text-[26px] text-[#c59a63]">lock_reset</span>
+              </div>
+              <div>
+                <h3 className="text-base font-black text-[#2C1A0E]">Forgot Password?</h3>
+                <p className="text-[11px] text-[#8D6E63] mt-0.5">Password recovery</p>
+              </div>
+            </div>
+
+            <div className="bg-white/60 rounded-2xl p-4 border border-[#D7C4B0]/60">
+              <p className="text-sm text-[#5D4037] font-medium leading-relaxed">
+                Passwords are managed by your <span className="font-black text-[#3E2723]">System Administrator</span>.
+              </p>
+              <p className="text-xs text-[#8D6E63] mt-2 leading-relaxed">
+                Please ask your Admin to reset your password from the
+                <span className="font-bold"> Admin Console → System Administration → Staff</span> section.
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-100 rounded-xl p-3">
+              <span className="material-symbols-outlined text-amber-500 text-[18px] mt-0.5">info</span>
+              <p className="text-xs text-amber-700 leading-relaxed">
+                The admin can hover over any staff card and click the
+                <span className="font-bold"> 🔒 lock icon</span> to reset a password instantly.
+              </p>
+            </div>
+
+            <button
+              onClick={() => setShowForgotModal(false)}
+              className="w-full py-3 rounded-xl bg-[#3E2723] text-[#FDFAF6] text-sm font-bold hover:bg-[#4E342E] transition-all"
+            >
+              Got it
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

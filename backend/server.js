@@ -1796,6 +1796,24 @@ app.post('/api/kiosk/verify-guest-pin', async (req, res) => {
   }
 });
 
+app.post('/api/kiosk/resend-pin', async (req, res) => {
+  try {
+    const { device_id } = req.body;
+    const session = await TableSession.findOne({ device_id, status: { $in: ['standby', 'active'] } });
+    if (!session || !session.email) {
+      return res.status(400).json({ error: 'No email associated with this session.' });
+    }
+    const success = await sendConfirmationEmail(session.email, session.guest_name, session.auth_code);
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(500).json({ error: 'Failed to resend PIN email.' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/kiosk/send-receipt', async (req, res) => {
   try {
     const { device_id, items, total, taxBreakdown } = req.body;
@@ -1856,12 +1874,11 @@ app.post('/api/kiosk/send-receipt', async (req, res) => {
         <p style="text-align: center; color: #888; font-size: 12px; margin-top: 40px;">We hope to see you again soon!</p>
       </div>
     `;
-
     const resendRes = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer re_HSDjYy61_2GZdgEwXzD1vamAPu5XoEXAV`
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
       },
       body: JSON.stringify({
         from: 'Pragati RMS <onboarding@resend.dev>',

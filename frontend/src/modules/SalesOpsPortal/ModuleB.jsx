@@ -242,6 +242,24 @@ const HostStandPanel = ({ socket }) => {
     showToast(`Session closed. Table ${tableId} needs cleaning.`, 'error');
   };
 
+  const resendPin = async (tableId) => {
+    try {
+      const res = await fetch(`${API}/api/kiosk/resend-pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: tableId })
+      });
+      if (res.ok) {
+        showToast('PIN resent successfully.');
+      } else {
+        const data = await res.json();
+        showToast(data.error || 'Failed to resend PIN.', 'error');
+      }
+    } catch (e) {
+      showToast('Network error resending PIN.', 'error');
+    }
+  };
+
   const filtered = zoneFilter === 'All' ? tables : tables.filter(t => t.zone === zoneFilter);
   const counts = { available: tables.filter(t => t.status === 'available').length, seated: tables.filter(t => t.status === 'seated').length, bookings: bookingsCount, cleaning: tables.filter(t => t.status === 'cleaning').length };
 
@@ -390,7 +408,14 @@ const HostStandPanel = ({ socket }) => {
                 <Pill label={style.label} color={style.labelColor} />
                 {table.guest && <p className={`text-sm font-bold mt-2 ${style.text} truncate`}>{table.guest}</p>}
                 {table.party && <p className={`text-[10px] mt-0.5 ${style.text} opacity-60`}>Party of {table.party}</p>}
-                {table.auth_code && <p className={`text-[11px] font-bold mt-1 bg-black/10 px-2 py-1 rounded w-fit ${style.text}`}>PIN: {table.auth_code}</p>}
+                {table.auth_code && (
+                  <div className={`flex items-center gap-2 mt-1 bg-black/10 px-2 py-1 rounded w-fit ${style.text}`}>
+                    <span className="text-[11px] font-bold">PIN: {table.auth_code}</span>
+                    <button onClick={(e) => { e.stopPropagation(); resendPin(table.id); }} className="hover:text-gray-900 transition-colors" title="Resend PIN">
+                      <span className="material-symbols-outlined text-[13px]">refresh</span>
+                    </button>
+                  </div>
+                )}
                 {table.zone && <p className="text-[9px] mt-1 text-gray-400 font-semibold uppercase tracking-widest">{table.zone}</p>}
                 {table.status === 'available' && <p className="text-[10px] mt-2 text-gray-400">Tap to seat guests</p>}
               </div>
